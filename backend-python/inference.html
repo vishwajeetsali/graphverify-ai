@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphVerify AI — Forensic Engine Client</title>
+    <!-- Premium Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0b0f19;
+            --bg-surface: #111827;
+            --bg-card: #1f2937;
+            --border-color: #374151;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --color-primary: #3b82f6;
+            --color-primary-glow: rgba(59, 130, 246, 0.15);
+            --color-danger: #ef4444;
+            --color-danger-glow: rgba(239, 68, 68, 0.15);
+            --color-success: #22c55e;
+            --color-success-glow: rgba(34, 197, 94, 0.15);
+            --color-warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Glassmorphic Navbar */
+        header {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            padding: 12px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-logo {
+            font-size: 28px;
+        }
+
+        .brand-title {
+            font-size: 20px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            background: linear-gradient(to right, #3b82f6, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .engine-status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--color-danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .engine-status-badge.online {
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--color-success);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--color-danger);
+            display: inline-block;
+            box-shadow: 0 0 8px var(--color-danger);
+        }
+
+        .online .status-dot {
+            background-color: var(--color-success);
+            box-shadow: 0 0 8px var(--color-success);
+            animation: pulse 2s infinite;
+        }
+
+        /* Container & Layout */
+        main {
+            max-width: 1400px;
+            width: 100%;
+            margin: 30px auto;
+            padding: 0 40px;
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Left Card: Document Upload and Viewer */
+        .upload-section {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            min-height: 450px;
+            text-align: center;
+        }
+
+        .dropzone {
+            width: 100%;
+            height: 100%;
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.01);
+        }
+
+        .dropzone:hover, .dropzone.dragover {
+            border-color: var(--color-primary);
+            background: rgba(59, 130, 246, 0.03);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            color: var(--text-muted);
+            transition: transform 0.2s ease;
+        }
+
+        .dropzone:hover .upload-icon {
+            transform: translateY(-5px);
+        }
+
+        .dropzone-text {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .dropzone-subtext {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .hidden-file-input {
+            display: none;
+        }
+
+        /* Document Viewer */
+        .viewer-container {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            padding: 20px;
+        }
+
+        .viewer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .viewer-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .btn-reset {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-reset:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .doc-wrapper {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            height: 480px;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .base-document {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 4px;
+        }
+
+        .overlay-layer {
+            position: absolute;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            transition: opacity 0.1s ease;
+        }
+
+        .opacity-control {
+            margin-top: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .opacity-label {
+            font-size: 13px;
+            color: var(--text-muted);
+            min-width: 110px;
+        }
+
+        .slider {
+            flex: 1;
+            height: 5px;
+            background: var(--border-color);
+            border-radius: 5px;
+            outline: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: var(--color-primary);
+            cursor: pointer;
+            box-shadow: 0 0 5px var(--color-primary);
+        }
+
+        .opacity-val {
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 35px;
+            text-align: right;
+        }
+
+        /* Right Card: Tabs & Diagnostics */
+        .diagnostics-section {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 24px;
+        }
+
+        .banner-alert {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            animation: slideDown 0.3s ease;
+        }
+
+        .banner-alert.flagged {
+            background: var(--color-danger-glow);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .banner-alert.verified {
+            background: var(--color-success-glow);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+
+        .banner-alert-logo {
+            font-size: 26px;
+        }
+
+        .banner-alert-title {
+            font-weight: 700;
+            font-size: 15px;
+            margin-bottom: 2px;
+        }
+
+        .banner-alert.flagged .banner-alert-title { color: var(--color-danger); }
+        .banner-alert.verified .banner-alert-title { color: var(--color-success); }
+
+        .banner-alert-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .tab-bar {
+            display: flex;
+            gap: 6px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            padding: 10px 16px;
+            background: var(--bg-card);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            flex: 1;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-btn.active {
+            background: var(--color-primary);
+            color: #fff;
+            border-color: var(--color-primary);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .tab-pane {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        .tab-pane.active {
+            display: flex;
+        }
+
+        .pane-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+
+        /* Layer 1: Visual Mode Selector */
+        .visual-toggles {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .toggle-btn {
+            padding: 8px 14px;
+            background: var(--bg-base);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            flex: 1;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-btn.active.heatmap {
+            background: var(--color-danger-glow);
+            color: var(--color-danger);
+            border-color: rgba(239, 68, 68, 0.4);
+        }
+
+        .toggle-btn.active.gradcam {
+            background: var(--color-success-glow);
+            color: var(--color-success);
+            border-color: rgba(34, 197, 94, 0.4);
+        }
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 26px;
+            font-weight: 800;
+        }
+
+        .metric-value.flagged { color: var(--color-danger); }
+        .metric-value.verified { color: var(--color-success); }
+
+        .metric-text {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .highlight-notice {
+            color: var(--color-danger);
+            font-size: 12px;
+            line-height: 1.4;
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        /* List Items */
+        .list-container {
+            max-height: 250px;
+            overflow-y: auto;
+            padding-right: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .list-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 13px;
+        }
+
+        .list-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .anomaly-type {
+            font-weight: 700;
+            color: var(--color-warning);
+            text-transform: uppercase;
+            font-size: 11px;
+        }
+
+        .anomaly-severity {
+            font-weight: 700;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--color-warning);
+        }
+
+        .anomaly-severity.high {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--color-danger);
+        }
+
+        .list-item-desc {
+            font-size: 12px;
+            color: var(--text-main);
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 180px;
+            gap: 8px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px dashed var(--border-color);
+            border-radius: 10px;
+        }
+
+        .empty-state-title {
+            color: var(--color-success);
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .empty-state-sub {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Loading Spinner */
+        .spinner-wrapper {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            height: 480px;
+            width: 100%;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--border-color);
+            border-top-color: var(--color-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* Keyframes */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.15); }
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand">
+            <span class="brand-logo">🔍</span>
+            <h1 class="brand-title">GraphVerify AI Forensic Engine</h1>
+        </div>
+        <div class="engine-status-badge" id="statusBadge">
+            <span class="status-dot"></span>
+            <span id="statusText">Checking Backend Engine...</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Left: Upload Card -->
+        <div class="card">
+            <!-- Dropzone Section -->
+            <div class="upload-section" id="uploadSection">
+                <div class="dropzone" id="dropzone">
+                    <span class="upload-icon">📥</span>
+                    <p class="dropzone-text">Drag and drop bank statement here</p>
+                    <p class="dropzone-subtext">Supports PNG, JPG, or PDF files (max 20MB)</p>
+                    <input type="file" class="hidden-file-input" id="fileInput" accept="image/png, image/jpeg, application/pdf">
+                </div>
+            </div>
+
+            <!-- Loader Section -->
+            <div class="spinner-wrapper" id="spinnerWrapper">
+                <div class="spinner"></div>
+                <p style="font-weight: 600; font-size: 14px;">Analyzing Document Layers...</p>
+            </div>
+
+            <!-- Preview Section -->
+            <div class="viewer-container" id="viewerContainer">
+                <div class="viewer-header">
+                    <p class="viewer-title" id="viewerTitle">Document Preview</p>
+                    <button class="btn-reset" id="btnReset">
+                        <span>🔄</span> Clear & Upload New
+                    </button>
+                </div>
+                <div class="doc-wrapper" id="docWrapper">
+                    <img id="baseImage" class="base-document" src="" alt="Base Document">
+                    <img id="overlayImage" class="overlay-layer" src="" alt="Overlay Heatmap">
+                </div>
+                <div class="opacity-control" id="opacityControl">
+                    <span class="opacity-label">Overlay Opacity:</span>
+                    <input type="range" class="slider" id="opacitySlider" min="0" max="1" step="0.05" value="0.85">
+                    <span class="opacity-val" id="opacityVal">85%</span>
+                </div>
+                <p class="highlight-notice" id="highlightNotice" style="margin-top: 14px; font-size: 13px; line-height: 1.5; text-align: center; color: var(--color-danger); font-weight: 500;">
+                    🔴 Red glowing blobs in the preview indicate pixel compression mismatch.
+                </p>
+            </div>
+        </div>
+
+        <!-- Right: Results Card -->
+        <div class="card" style="min-height: 520px;">
+            <div class="diagnostics-section" id="resultsSection" style="display: none;">
+                <!-- Flagged Banner -->
+                <div class="banner-alert" id="bannerAlert">
+                    <span class="banner-alert-logo" id="bannerAlertLogo">🚨</span>
+                    <div style="flex: 1;">
+                        <h3 class="banner-alert-title" id="bannerAlertTitle">Potential Forgery Detected</h3>
+                        <p class="banner-alert-sub" id="bannerAlertSub">Forensic Score: 0% | Structural: CLEAN</p>
+                    </div>
+                </div>
+
+                <!-- Tab Selection -->
+                <div class="tab-bar">
+                    <button class="tab-btn active" data-tab="visual">🔍 Layer 1: Visual</button>
+                    <button class="tab-btn" data-tab="structural">🕸️ Layer 2: Structural</button>
+                    <button class="tab-btn" data-tab="logical">🧮 Layer 3: Logical</button>
+                </div>
+
+                <!-- Tab 1: Visual Forensic -->
+                <div class="tab-pane active" id="tab-visual">
+                    <p class="pane-desc">
+                        Analyzes pixel-compression inconsistencies (ELA), high-pass frequency residuals (SRM), and DCT frequency grids to isolate spliced regions.
+                    </p>
+                    <div class="visual-toggles" id="visualToggles">
+                        <button class="toggle-btn active heatmap" id="btnHeatmap">🔥 Tampering Heatmap</button>
+                        <button class="toggle-btn gradcam" id="btnGradcam">🧠 Grad-CAM Attention</button>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <p class="metric-label">Visual Risk Score</p>
+                            <p class="metric-value" id="visualRiskVal">0%</p>
+                        </div>
+                        <div class="metric-card">
+                            <p class="metric-label">Signature Scan</p>
+                            <p class="metric-text" id="visualSignatureText">Normal</p>
+                        </div>
+                    </div>
+                </div>
+                </div>
+
+                <!-- Tab 2: Structural topology -->
+                <div class="tab-pane" id="tab-structural">
+                    <p class="pane-desc">
+                        Maps spatial character bounding boxes and text layout vectors. Flags row misalignments, font changes, and floating text segments (copy-paste inputs).
+                    </p>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <p class="metric-label">Topology Anomalies</p>
+                            <p class="metric-value" id="structuralAnomaliesVal">0</p>
+                        </div>
+                        <div class="metric-card">
+                            <p class="metric-label">OCR Word Nodes</p>
+                            <p class="metric-text" id="structuralWordsVal">0 words</p>
+                        </div>
+                    </div>
+                    <div class="list-container" id="anomaliesList">
+                        <!-- Filled dynamically -->
+                    </div>
+                </div>
+
+                <!-- Tab 3: Logical auditor -->
+                <div class="tab-pane" id="tab-logical">
+                    <p class="pane-desc">
+                        Cross-verifies transaction progression values to detect balance contradictions.
+                    </p>
+                    <div class="metrics-grid">
+                        <div class="metric-card" style="grid-column: span 2;">
+                            <p class="metric-label">Math Progression Check</p>
+                            <p class="metric-text" id="logicalStatusText">Math Verified</p>
+                        </div>
+                    </div>
+                    <div class="list-container" id="logicalList">
+                        <!-- Filled dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Empty results view -->
+            <div class="upload-section" id="resultsEmpty" style="color: var(--text-muted); font-size: 14px;">
+                <span>📄</span>
+                <p style="margin-top: 10px;">Upload a statement document to review AI forensics diagnostics.</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const BACKEND_URL = window.location.hostname ? `${window.location.protocol}//${window.location.host}` : "http://localhost:8000";
+        let documentResult = null;
+        let originalFileUrl = null;
+        let activeTabMode = 'heatmap'; // 'heatmap', 'gradcam', 'structural', or 'none'
+
+        // DOM elements
+        const statusBadge = document.getElementById('statusBadge');
+        const statusText = document.getElementById('statusText');
+        const uploadSection = document.getElementById('uploadSection');
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const spinnerWrapper = document.getElementById('spinnerWrapper');
+        const viewerContainer = document.getElementById('viewerContainer');
+        const baseImage = document.getElementById('baseImage');
+        const overlayImage = document.getElementById('overlayImage');
+        const opacitySlider = document.getElementById('opacitySlider');
+        const opacityVal = document.getElementById('opacityVal');
+        const btnReset = document.getElementById('btnReset');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsEmpty = document.getElementById('resultsEmpty');
+        const opacityControl = document.getElementById('opacityControl');
+
+        // Check backend connection on load
+        async function checkConnection() {
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    statusBadge.classList.add('online');
+                    statusText.innerText = data.models_loaded 
+                        ? "Engine Online — Deep CNN Mode" 
+                        : "Engine Online — Classical Fallback";
+                } else {
+                    throw new Error("Offline");
+                }
+            } catch (e) {
+                statusBadge.classList.remove('online');
+                statusText.innerText = "Engine Offline — Run uvicorn";
+            }
+        }
+        checkConnection();
+        setInterval(checkConnection, 10000);
+
+        // Upload interaction events
+        dropzone.addEventListener('click', () => fileInput.click());
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                handleFile(fileInput.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            // Check PDF fallback
+            if (file.type === 'application/pdf') {
+                alert("PDF uploads will render using backend extraction services. The preview will load once complete.");
+            }
+            uploadFile(file);
+        }
+
+        // Reset UI
+        btnReset.addEventListener('click', () => {
+            documentResult = null;
+            if (originalFileUrl) URL.revokeObjectURL(originalFileUrl);
+            originalFileUrl = null;
+            baseImage.src = "";
+            overlayImage.src = "";
+            overlayImage.style.display = "none";
+            viewerContainer.style.display = "none";
+            resultsSection.style.display = "none";
+            resultsEmpty.style.display = "flex";
+            uploadSection.style.display = "flex";
+            fileInput.value = "";
+        });
+
+        // Opacity slider event
+        opacitySlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            overlayImage.style.opacity = val;
+            opacityVal.innerText = `${Math.round(val * 100)}%`;
+        });
+
+        // API Upload
+        async function uploadFile(file) {
+            uploadSection.style.display = "none";
+            spinnerWrapper.style.display = "flex";
+            resultsEmpty.style.display = "flex";
+            resultsSection.style.display = "none";
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/process-image`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorMsg = await response.text();
+                    throw new Error(errorMsg || "Upload failed");
+                }
+
+                const data = await response.json();
+                documentResult = data;
+                
+                // Store URL
+                originalFileUrl = URL.createObjectURL(file);
+                
+                renderResults(data);
+            } catch (e) {
+                alert(`Error processing file: ${e.message}`);
+                // Go back to upload
+                spinnerWrapper.style.display = "none";
+                uploadSection.style.display = "flex";
+            }
+        }
+
+        // Mathematical validation helper functions
+        function parseIndianNumber(str) {
+            const cleaned = str.replace(/,/g, '');
+            const n = parseFloat(cleaned);
+            return isNaN(n) ? null : n;
+        }
+
+        function extractTransactionRows(text) {
+            const rows = [];
+            if (!text) return rows;
+            const lines = text.split('\n');
+            const datePattern = /\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/g;
+            const numPattern = /[\d,]+\.\d{2}/g;
+
+            lines.forEach((line, idx) => {
+                const cleanedLine = line.replace(datePattern, '');
+                const matches = cleanedLine.match(numPattern);
+                if (matches && matches.length >= 2) {
+                    rows.push({
+                        lineNum: idx + 1,
+                        raw: line.trim(),
+                        numbers: matches.map(parseIndianNumber).filter(n => n !== null)
+                    });
+                }
+            });
+            return rows;
+        }
+
+        function checkBalanceContinuity(rows) {
+            const errors = [];
+            for (let i = 1; i < rows.length; i++) {
+                const prev = rows[i - 1];
+                const curr = rows[i];
+                if (curr.numbers.length < 2) continue;
+
+                const prevBalance = prev.numbers[prev.numbers.length - 1];
+                const currBalance = curr.numbers[curr.numbers.length - 1];
+                const transaction = curr.numbers[0];
+
+                const expectedCredit = prevBalance + transaction;
+                const expectedDebit = prevBalance - transaction;
+
+                const tolerance = 1.0;
+                const creditOk = Math.abs(expectedCredit - currBalance) <= tolerance;
+                const debitOk = Math.abs(expectedDebit - currBalance) <= tolerance;
+
+                if (!creditOk && !debitOk) {
+                    errors.push({
+                        row: `Row ${curr.lineNum}`,
+                        error: `Balance mismatch — prev ₹${prevBalance.toLocaleString('en-IN')} ± txn ₹${transaction.toLocaleString('en-IN')} ≠ balance ₹${currBalance.toLocaleString('en-IN')}`,
+                        severity: 'HIGH'
+                    });
+                }
+            }
+            return errors;
+        }
+
+        function renderResults(data) {
+            spinnerWrapper.style.display = "none";
+            viewerContainer.style.display = "flex";
+            resultsEmpty.style.display = "none";
+            resultsSection.style.display = "flex";
+
+            // 1. Render Preview
+            baseImage.src = originalFileUrl;
+            
+            // Default visual mode
+            activeTabMode = 'heatmap';
+            document.getElementById('btnHeatmap').classList.add('active');
+            document.getElementById('btnGradcam').classList.remove('active');
+            updateOverlayImage();
+
+            // 2. Banner alert
+            const bannerAlert = document.getElementById('bannerAlert');
+            const bannerAlertLogo = document.getElementById('bannerAlertLogo');
+            const bannerAlertTitle = document.getElementById('bannerAlertTitle');
+            const bannerAlertSub = document.getElementById('bannerAlertSub');
+
+            const isFlagged = data.forged;
+            if (isFlagged) {
+                bannerAlert.className = "banner-alert flagged";
+                bannerAlertLogo.innerText = "🚨";
+                bannerAlertTitle.innerText = "POTENTIAL FORGERY DETECTED";
+            } else {
+                bannerAlert.className = "banner-alert verified";
+                bannerAlertLogo.innerText = "✅";
+                bannerAlertTitle.innerText = "DOCUMENT VERIFIED — CLEAN";
+            }
+            bannerAlertSub.innerHTML = `Forensic Risk: <strong>${data.risk_score}%</strong> | Structural Risk: <strong>${data.structural.risk_level}</strong>`;
+
+            // 3. Tab 1: Visual Metrics
+            const visualRiskVal = document.getElementById('visualRiskVal');
+            const visualSignatureText = document.getElementById('visualSignatureText');
+            
+            visualRiskVal.innerText = `${data.risk_score}%`;
+            visualRiskVal.className = `metric-value ${data.risk_score > 40 ? 'flagged' : 'verified'}`;
+            visualSignatureText.innerText = data.risk_score > 40 ? "Anomaly Detected" : "Normal";
+            visualSignatureText.style.color = data.risk_score > 40 ? "var(--color-danger)" : "var(--color-success)";
+
+            // Show or hide Gradcam toggle
+            const btnGradcam = document.getElementById('btnGradcam');
+            if (data.gradcam_base64) {
+                btnGradcam.style.display = "block";
+            } else {
+                btnGradcam.style.display = "none";
+            }
+
+            // 4. Tab 2: Structural list
+            document.getElementById('structuralAnomaliesVal').innerText = data.structural.anomaly_count;
+            document.getElementById('structuralWordsVal').innerText = `${data.structural.words_found} words`;
+            const anomaliesList = document.getElementById('anomaliesList');
+            anomaliesList.innerHTML = "";
+
+            if (data.structural.anomalies && data.structural.anomalies.length > 0) {
+                data.structural.anomalies.forEach(a => {
+                    const item = document.createElement('div');
+                    item.className = "list-item";
+                    item.innerHTML = `
+                        <div class="list-item-header">
+                            <span class="anomaly-type">${a.type.replace(/_/g, ' ')}</span>
+                            <span class="anomaly-severity ${a.severity.toLowerCase()}">${a.severity}</span>
+                        </div>
+                        <p class="list-item-desc">
+                            <strong>Found:</strong> "${a.text}" at ${a.location} — ${a.detail}
+                        </p>
+                    `;
+                    anomaliesList.appendChild(item);
+                });
+            } else {
+                anomaliesList.innerHTML = `
+                    <div class="empty-state">
+                        <span class="empty-state-title">Structure fully aligned</span>
+                        <span class="empty-state-sub">No character box coordinate drift found.</span>
+                    </div>
+                `;
+            }
+
+            // 5. Tab 3: Logical List
+            const logicalList = document.getElementById('logicalList');
+            const logicalStatusText = document.getElementById('logicalStatusText');
+            logicalList.innerHTML = "";
+
+            // Perform client-side mathematical verification of transaction rows
+            const ocrText = data.structural ? data.structural.ocr_text : "";
+            const txRows = extractTransactionRows(ocrText);
+            const mathErrors = checkBalanceContinuity(txRows);
+
+            if (mathErrors.length > 0) {
+                logicalStatusText.innerText = `${mathErrors.length} Balance Mismatches Found`;
+                logicalStatusText.style.color = "var(--color-danger)";
+                mathErrors.forEach(err => {
+                    const item = document.createElement('div');
+                    item.className = "list-item";
+                    item.innerHTML = `
+                        <div class="list-item-header">
+                            <span class="anomaly-type" style="color: var(--color-danger)">Balance Check</span>
+                            <span class="anomaly-severity high">HIGH</span>
+                        </div>
+                        <p class="list-item-desc">
+                            <strong>${err.row}:</strong> ${err.error}
+                        </p>
+                    `;
+                    logicalList.appendChild(item);
+                });
+            } else {
+                logicalStatusText.innerText = txRows.length > 0 
+                    ? `Math verified across ${txRows.length} transaction rows` 
+                    : "No structured transaction rows detected for audit";
+                logicalStatusText.style.color = txRows.length > 0 ? "var(--color-success)" : "var(--text-muted)";
+                logicalList.innerHTML = `
+                    <div class="empty-state" style="height: 120px;">
+                        <span class="empty-state-title" style="color: ${txRows.length > 0 ? 'var(--color-success)' : 'var(--text-muted)'}">
+                            ${txRows.length > 0 ? 'Audit checks verified' : 'No statements found'}
+                        </span>
+                        <span class="empty-state-sub">
+                            ${txRows.length > 0 
+                                ? 'Tabular balance progressions match transaction totals.' 
+                                : 'Ensure the document has tabular transactions with debit/credit/balance columns.'}
+                        </span>
+                    </div>
+                `;
+            }
+        }
+
+        // Toggle Heatmap / Gradcam / Structural overlays
+        function updateOverlayImage() {
+            if (!documentResult) return;
+            
+            if (activeTabMode === 'heatmap') {
+                if (documentResult.heatmap_base64) {
+                    overlayImage.src = `data:image/png;base64,${documentResult.heatmap_base64}`;
+                    overlayImage.style.display = "block";
+                    opacityControl.style.display = "flex";
+                    overlayImage.style.opacity = opacitySlider.value;
+                    document.getElementById('highlightNotice').innerText = "🔴 Red glowing blobs in the preview indicate pixel compression mismatch.";
+                    document.getElementById('highlightNotice').style.color = "var(--color-danger)";
+                } else {
+                    overlayImage.style.display = "none";
+                    opacityControl.style.display = "none";
+                }
+            } else if (activeTabMode === 'gradcam') {
+                if (documentResult.gradcam_base64) {
+                    overlayImage.src = `data:image/png;base64,${documentResult.gradcam_base64}`;
+                    overlayImage.style.display = "block";
+                    opacityControl.style.display = "flex";
+                    overlayImage.style.opacity = opacitySlider.value;
+                    document.getElementById('highlightNotice').innerText = "🧠 Bright regions show where the CNN focuses its attention — areas it considers most suspicious.";
+                    document.getElementById('highlightNotice').style.color = "var(--color-success)";
+                } else {
+                    overlayImage.style.display = "none";
+                    opacityControl.style.display = "none";
+                }
+            } else if (activeTabMode === 'structural') {
+                if (documentResult.structural && documentResult.structural.overlay_b64) {
+                    overlayImage.src = `data:image/jpeg;base64,${documentResult.structural.overlay_b64}`;
+                    overlayImage.style.display = "block";
+                    opacityControl.style.display = "flex";
+                    overlayImage.style.opacity = opacitySlider.value;
+                    document.getElementById('highlightNotice').innerText = "📐 Red boxes in the preview highlight font size, alignment, or spacing outliers.";
+                    document.getElementById('highlightNotice').style.color = "var(--color-warning)";
+                } else {
+                    overlayImage.style.display = "none";
+                    opacityControl.style.display = "none";
+                }
+            } else {
+                overlayImage.style.display = "none";
+                opacityControl.style.display = "none";
+            }
+        }
+
+        document.getElementById('btnHeatmap').addEventListener('click', () => {
+            activeTabMode = 'heatmap';
+            document.getElementById('btnHeatmap').classList.add('active');
+            document.getElementById('btnGradcam').classList.remove('active');
+            updateOverlayImage();
+        });
+
+        document.getElementById('btnGradcam').addEventListener('click', () => {
+            activeTabMode = 'gradcam';
+            document.getElementById('btnHeatmap').classList.remove('active');
+            document.getElementById('btnGradcam').classList.add('active');
+            updateOverlayImage();
+        });
+
+        // Tab selection events
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const tabPanes = document.querySelectorAll('.tab-pane');
+
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetTab = btn.getAttribute('data-tab');
+                
+                // Active button
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                // Active pane
+                tabPanes.forEach(pane => pane.classList.remove('active'));
+                document.getElementById(`tab-${targetTab}`).classList.add('active');
+
+                // Sync visual overlay
+                if (targetTab === 'visual') {
+                    const heatmapBtn = document.getElementById('btnHeatmap');
+                    activeTabMode = heatmapBtn.classList.contains('active') ? 'heatmap' : 'gradcam';
+                } else if (targetTab === 'structural') {
+                    activeTabMode = 'structural';
+                } else {
+                    activeTabMode = 'none';
+                }
+                updateOverlayImage();
+            });
+        });
+    </script>
+</body>
+</html>
