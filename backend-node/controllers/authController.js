@@ -9,6 +9,19 @@ const {
     verifyAuthenticationResponse,
 } = require('@simplewebauthn/server')
 
+// Helper to dynamically extract origin and hostname (RP ID) from request headers
+function _getWebAuthnConfig(req) {
+    const origin = req.headers.origin || 'http://localhost:5173'
+    let rpID = 'localhost'
+    try {
+        const url = new URL(origin)
+        rpID = url.hostname
+    } catch (e) {
+        console.error('[WEBAUTHN CONFIG ERROR]', e.message)
+    }
+    return { origin, rpID }
+}
+
 // ── PHASE 1: Demo login (no biometrics) ───────────────────────────────────
 // Left as a robust fallback in case biometric hardware is unavailable
 exports.demoLogin = async (req, res) => {
@@ -55,9 +68,11 @@ exports.generateRegistrationOptions = async (req, res) => {
             user = await User.create({ username })
         }
 
+        const { origin, rpID } = _getWebAuthnConfig(req)
+
         const options = await generateRegistrationOptions({
             rpName: 'GraphVerify AI',
-            rpID: 'localhost',
+            rpID: rpID,
             userID: user._id.toString(),
             userName: user.username,
             userDisplayName: user.username,
@@ -90,11 +105,13 @@ exports.verifyRegistration = async (req, res) => {
             return res.status(400).json({ error: 'Registration challenge not found for user' })
         }
 
+        const { origin, rpID } = _getWebAuthnConfig(req)
+
         const verification = await verifyRegistrationResponse({
             response: registrationResponse,
             expectedChallenge: user.currentChallenge,
-            expectedOrigin: 'http://localhost:5173', // Vite local origin
-            expectedRPID: 'localhost',
+            expectedOrigin: origin,
+            expectedRPID: rpID,
         })
 
         if (!verification.verified) {
@@ -133,8 +150,10 @@ exports.generateAuthenticationOptions = async (req, res) => {
             return res.status(404).json({ error: 'User or biometrics credential not registered' })
         }
 
+        const { origin, rpID } = _getWebAuthnConfig(req)
+
         const options = await generateAuthenticationOptions({
-            rpID: 'localhost',
+            rpID: rpID,
             allowCredentials: [{
                 id: Buffer.from(user.credentialID, 'base64url'),
                 type: 'public-key',
@@ -164,11 +183,13 @@ exports.verifyAuthentication = async (req, res) => {
             return res.status(400).json({ error: 'Authentication challenge or public key not found' })
         }
 
+        const { origin, rpID } = _getWebAuthnConfig(req)
+
         const verification = await verifyAuthenticationResponse({
             response: authenticationResponse,
             expectedChallenge: user.currentChallenge,
-            expectedOrigin: 'http://localhost:5173',
-            expectedRPID: 'localhost',
+            expectedOrigin: origin,
+            expectedRPID: rpID,
             authenticator: {
                 credentialID: Buffer.from(user.credentialID, 'base64url'),
                 credentialPublicKey: user.credentialPublicKey,
