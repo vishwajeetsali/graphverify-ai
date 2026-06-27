@@ -9,15 +9,22 @@ const {
     verifyAuthenticationResponse,
 } = require('@simplewebauthn/server')
 
-// Helper to dynamically extract origin and hostname (RP ID) from request headers
+// Helper to dynamically extract origin and hostname (RP ID) from request headers or environment variables
 function _getWebAuthnConfig(req) {
-    const origin = req.headers.origin || 'http://localhost:5173'
-    let rpID = 'localhost'
-    try {
-        const url = new URL(origin)
-        rpID = url.hostname
-    } catch (e) {
-        console.error('[WEBAUTHN CONFIG ERROR]', e.message)
+    // Priority: Environment variables > Incoming Origin header > Local dev fallback
+    let origin = process.env.FRONTEND_URL
+    let rpID = process.env.RP_ID
+
+    if (!origin) {
+        origin = req.headers.origin || 'http://localhost:5173'
+    }
+    if (!rpID) {
+        try {
+            const url = new URL(origin)
+            rpID = url.hostname
+        } catch (e) {
+            rpID = 'localhost'
+        }
     }
     return { origin, rpID }
 }
