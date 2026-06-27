@@ -12,7 +12,16 @@ const PORT = process.env.PORT || 5000
 
 connectDB()
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'], credentials: true }))
+// Dynamic CORS helper to support credentials (cookies/WebAuthn) from deployed origins
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, postman, curl, or server-to-server)
+        if (!origin) return callback(null, true)
+        // In hackathon production, allow all origins to eliminate any frontend deployment blockages
+        return callback(null, true)
+    },
+    credentials: true
+}))
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true }))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))

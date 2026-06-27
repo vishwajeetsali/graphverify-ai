@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/documents/:path*",
+      "destination": "https://graphverify-backend.onrender.com/api/documents/:path*"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://graphverify-backend.onrender.com/auth/:path*"
+    },
+    {
+      "source": "/uploads/:path*",
+      "destination": "https://graphverify-backend.onrender.com/uploads/:path*"
+    }
+  ]
+}
