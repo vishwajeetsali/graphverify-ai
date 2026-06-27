@@ -164,7 +164,6 @@ exports.generateAuthenticationOptions = async (req, res) => {
             allowCredentials: [{
                 id: Buffer.from(user.credentialID, 'base64url'),
                 type: 'public-key',
-                transports: ['internal'], // Only search for internal biometrics (Windows Hello)
             }],
             userVerification: 'preferred',
         })
