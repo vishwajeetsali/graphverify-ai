@@ -71,8 +71,12 @@ exports.uploadDocument = async (req, res) => {
 
         const isDigitalPdf = req.file.mimetype === 'application/pdf' && aiResult.layer === 'digital_pdf'
 
-        // Cascade gate: If visual score is highly confident it's clean (< 15.0), bypass downstream layers (except for digital PDFs which bypass visual layer but require logical math audit)
-        if (aiResult.risk_score >= 15.0 || isDigitalPdf) {
+        let fusedScore   = aiResult.risk_score
+        let fusedForged  = aiResult.forged
+
+        // Cascade gate: run structural/logical even on borderline clean scores (8% threshold instead of 15%)
+        // This ensures copy-move and row-deletion forgeries that ELA misses are still caught by layers 2+3
+        if (aiResult.risk_score >= 8.0 || isDigitalPdf) {
             const { checkLogic } = require('./logicController')
             const ocrText = aiResult.structural?.ocr_text || ''
             const ocrWords = aiResult.structural?.ocr_words || []
@@ -84,16 +88,37 @@ exports.uploadDocument = async (req, res) => {
                 req.file.path, 
                 req.file.mimetype, 
                 ocrText,
-                ocrWords, // Pass actual OCR words metadata for confidence checks
+                ocrWords,
                 req.file.originalname
             )
             logicalWarnings = logicResult.warnings || []
             logicalExplanation = logicResult.explanation || null
 
-            isStructuralAnomaly = ['HIGH'].includes(aiResult.structural?.risk_level)
+            // ── CROSS-LAYER EVIDENCE FUSION ───────────────────────────────────
+            // If Layer 1 (ELA) was blind to the forgery (e.g. copy-move),
+            // Layers 2+3 can independently override the verdict.
+            // fused_score = max(L1_visual, L2_structural × 0.35, L3_logic × 0.45)
+            const structuralScore = (() => {
+                const level = aiResult.structural?.risk_level
+                if (level === 'HIGH')   return 85
+                if (level === 'MEDIUM') return 55
+                if (level === 'LOW')    return 30
+                return 0
+            })()
+            const logicalScore = Math.min(100, (logicalWarnings?.length || 0) * 40)
+            fusedScore = Math.round(Math.max(
+                aiResult.risk_score,
+                structuralScore * 0.35,
+                logicalScore * 0.45
+            ))
+            fusedForged = fusedScore >= 30 || aiResult.forged
+            if (fusedForged && !aiResult.forged) {
+                console.log(`[FUSION OVERRIDE] L1=${aiResult.risk_score}% — fused=${fusedScore}% — overriding to FORGED`)
+            }
+
+            isStructuralAnomaly = ['HIGH', 'MEDIUM'].includes(aiResult.structural?.risk_level)
         } else {
-            console.log(`[CASCADE BYPASS] Visual risk score ${aiResult.risk_score}% is < 15.0%. Bypassing structural/logical checks.`)
-            // Clear structural anomalies and risk level to prevent false visual highlighting in frontend
+            console.log(`[CASCADE BYPASS] Visual risk score ${aiResult.risk_score}% < 8.0%. Bypassing structural/logical checks.`)
             if (aiResult.structural) {
                 aiResult.structural.anomalies = []
                 aiResult.structural.anomaly_count = 0
@@ -113,9 +138,9 @@ exports.uploadDocument = async (req, res) => {
             aiResult.structural.overlay_b64 = saveBase64Image(aiResult.structural.overlay_b64, 'overlay', docId, 'jpg')
         }
 
-        // Calibrate validation status
+        // Calibrate validation status — uses fused score
         const isLogicalAnomaly = logicalWarnings && logicalWarnings.length > 0
-        const status = (aiResult.forged || isStructuralAnomaly || isLogicalAnomaly) ? 'flagged' : 'clean'
+        const status = (fusedForged || isStructuralAnomaly || isLogicalAnomaly) ? 'flagged' : 'clean'
 
         if (isDbConnected && doc) {
             await Document.findByIdAndUpdate(doc._id, {
@@ -136,7 +161,7 @@ exports.uploadDocument = async (req, res) => {
         return res.json({
             documentId: docId,
             status,
-            forensicScore: aiResult.risk_score,
+            forensicScore: fusedScore,
             heatmap: heatmapPath,
             gradcam: gradcamPath,
             originalImage: `/uploads/${req.file.filename}`,
@@ -144,7 +169,13 @@ exports.uploadDocument = async (req, res) => {
             logicalExplanation,
             structural: aiResult.structural || {},
             pdfMetadata: aiResult.pdf_metadata || null,
-            layer: aiResult.layer
+            layer: aiResult.layer,
+            fusionDetails: {
+                visualScore: aiResult.risk_score,
+                structuralScore,
+                logicalScore,
+                fusedScore
+            }
         })
 
     } catch (err) {

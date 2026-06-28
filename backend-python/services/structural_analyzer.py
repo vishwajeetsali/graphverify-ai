@@ -404,6 +404,194 @@ def _draw_anomaly_overlay(img_bgr, boxes, anomalies):
     return base64.b64encode(buf).decode('utf-8')
 
 
+# ── ROW DELETION DETECTOR ──────────────────────────────────────────────────
+
+def _detect_row_deletion(boxes):
+    """
+    Detects deleted rows by finding abnormal Y-coordinate gaps between
+    consecutive OCR row groups. A deleted row creates a gap that is
+    statistically larger than the median inter-row spacing.
+    """
+    if len(boxes) < 8:
+        return []
+
+    # Group boxes into rows by Y proximity
+    rows = {}
+    for box in boxes:
+        placed = False
+        for row_y in rows:
+            if abs(box['y'] - row_y) < 14:
+                rows[row_y].append(box)
+                placed = True
+                break
+        if not placed:
+            rows[box['y']] = [box]
+
+    # Get sorted row Y-centers, only rows with >= 2 words (content rows)
+    row_ys = sorted(
+        [r_y for r_y in rows if len(rows[r_y]) >= 2]
+    )
+
+    if len(row_ys) < 4:
+        return []
+
+    gaps = [row_ys[i+1] - row_ys[i] for i in range(len(row_ys) - 1)]
+    sorted_gaps = sorted(gaps)
+    median_gap = sorted_gaps[len(sorted_gaps) // 2]
+
+    if median_gap < 5:
+        return []
+
+    anomalies = []
+    for i, gap in enumerate(gaps):
+        if gap > median_gap * 2.5 and gap > 20:
+            # Get representative text from surrounding rows
+            above_row = sorted(rows.get(row_ys[i], []), key=lambda b: b['x'])
+            below_row = sorted(rows.get(row_ys[i+1], []), key=lambda b: b['x'])
+            above_text = ' '.join(b['text'] for b in above_row[:3]) if above_row else '?'
+            below_text = ' '.join(b['text'] for b in below_row[:3]) if below_row else '?'
+            anomalies.append({
+                'type':     'ROW_DELETION_GAP',
+                'severity': 'HIGH' if gap > median_gap * 4 else 'MEDIUM',
+                'text':     f'{above_text} → {below_text}',
+                'location': f'(y={row_ys[i]}→{row_ys[i+1]})',
+                'detail':   (
+                    f'Y-gap of {gap}px between consecutive text rows '
+                    f'({gap/median_gap:.1f}× median={median_gap}px) — '
+                    f'consistent with a deleted transaction row.'
+                )
+            })
+
+    return anomalies[:3]
+
+
+# ── OCR CONFIDENCE ANOMALY DETECTOR ─────────────────────────────────────
+
+def _detect_ocr_confidence_anomalies(boxes):
+    """
+    Digitally injected or copy-moved text renders differently from surrounding
+    printed text. Tesseract consistently returns anomalous confidence scores on
+    such text — either suspiciously high (perfect synthetic render) or low
+    (poor match with trained character models).
+
+    Flags words in numeric/amount columns whose confidence is a statistical
+    outlier vs all other boxes.
+    """
+    if len(boxes) < 10:
+        return []
+
+    # Focus on words that look like amounts/balances (contain digits)
+    numeric_boxes = [
+        b for b in boxes
+        if any(c.isdigit() for c in b['text']) and len(b['text']) >= 2
+    ]
+
+    if len(numeric_boxes) < 5:
+        return []
+
+    confs = np.array([b['conf'] for b in numeric_boxes], dtype=np.float32)
+    mean_conf = confs.mean()
+    std_conf  = max(5.0, confs.std())  # floor std to avoid oversensitivity
+
+    anomalies = []
+    for b, conf in zip(numeric_boxes, confs):
+        z = (conf - mean_conf) / std_conf
+        # Flag extreme outliers: conf much lower (poorly rendered) or much higher (synthetic)
+        if abs(z) > 2.8:
+            direction = 'abnormally low' if z < 0 else 'suspiciously high'
+            anomalies.append({
+                'type':     'OCR_CONFIDENCE_OUTLIER',
+                'severity': 'HIGH' if abs(z) > 3.5 else 'MEDIUM',
+                'text':     b['text'],
+                'location': f"({b['x']}, {b['y']})",
+                'detail':   (
+                    f"Numeric value '{b['text']}' has {direction} OCR confidence "
+                    f"({conf:.0f} vs column mean {mean_conf:.0f}, z={z:.2f}) — "
+                    f"may indicate digitally inserted or copy-moved text."
+                )
+            })
+
+    return anomalies[:4]
+
+
+# ── SIFT COPY-MOVE DETECTOR ────────────────────────────────────────────────
+
+def _detect_copy_move(img_bgr):
+    """
+    ELA cannot detect copy-move forgeries because the copied region shares
+    the same compression history as the source. SIFT keypoint descriptor
+    matching finds self-similar regions within the same image.
+
+    Uses SIFT + FLANN matcher + Lowe ratio test + minimum spatial distance
+    filter to confirm genuine copy-move (source and destination are spatially
+    separated, not just symmetric background noise).
+    """
+    try:
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+        # Resize if too large to keep detection fast (< 2s)
+        h, w = gray.shape
+        max_dim = 1200
+        scale = 1.0
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            gray = cv2.resize(gray, (int(w * scale), int(h * scale)))
+
+        sift = cv2.SIFT_create(nfeatures=800, contrastThreshold=0.04)
+        kps, descs = sift.detectAndCompute(gray, None)
+
+        if descs is None or len(kps) < 20:
+            return []
+
+        # FLANN-based fast approximate nearest neighbour
+        index_params  = dict(algorithm=1, trees=5)  # FLANN_INDEX_KDTREE
+        search_params = dict(checks=50)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+        matches = flann.knnMatch(descs, descs, k=3)
+
+        # Lowe ratio test (skip self-match at index 0)
+        MIN_DIST_PX = min(h, w) * 0.08  # must be >= 8% of image dimension apart
+        good_matches = []
+        for m_list in matches:
+            # m_list[0] is self-match (distance=0), use [1] and [2]
+            if len(m_list) < 3:
+                continue
+            m, n = m_list[1], m_list[2]
+            if m.distance < 0.72 * n.distance and m.queryIdx != m.trainIdx:
+                pt1 = np.array(kps[m.queryIdx].pt)
+                pt2 = np.array(kps[m.trainIdx].pt)
+                dist = np.linalg.norm(pt1 - pt2)
+                if dist > MIN_DIST_PX:
+                    good_matches.append((pt1, pt2, m.distance))
+
+        if len(good_matches) < 8:
+            return []
+
+        # Cluster match endpoints into spatial regions
+        pts1 = np.array([m[0] for m in good_matches])
+        centroid1 = pts1.mean(axis=0) / scale
+        pts2 = np.array([m[1] for m in good_matches])
+        centroid2 = pts2.mean(axis=0) / scale
+
+        return [{
+            'type':     'COPY_MOVE_REGION',
+            'severity': 'HIGH' if len(good_matches) >= 15 else 'MEDIUM',
+            'text':     f'{len(good_matches)} matched keypoints',
+            'location': f'({int(centroid1[0])},{int(centroid1[1])}) → ({int(centroid2[0])},{int(centroid2[1])})',
+            'detail':   (
+                f'{len(good_matches)} SIFT keypoint pairs match across spatially separated regions '
+                f'(min separation: {MIN_DIST_PX/scale:.0f}px). '
+                f'Source region ~({int(centroid1[0])},{int(centroid1[1])}) copied to '
+                f'~({int(centroid2[0])},{int(centroid2[1])}) — '
+                f'ELA-invisible copy-move forgery detected.'
+            )
+        }]
+
+    except Exception as e:
+        print(f'[COPY_MOVE] Detection failed: {e}')
+        return []
+
+
 # ── PDF METADATA FORENSICS ─────────────────────────────────────────────────
 
 def analyze_pdf_metadata(image_bytes: bytes) -> dict:
@@ -569,6 +757,9 @@ def analyze_structure(image_bytes: bytes) -> dict:
         all_anomalies += _detect_spacing_anomalies(boxes)
         all_anomalies += _detect_low_confidence(boxes)
         all_anomalies += _detect_isolated_islands(boxes)
+        all_anomalies += _detect_row_deletion(boxes)
+        all_anomalies += _detect_ocr_confidence_anomalies(boxes)
+        all_anomalies += _detect_copy_move(img)
 
         # Deduplicate by location
         seen = set()
