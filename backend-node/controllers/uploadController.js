@@ -60,7 +60,7 @@ exports.uploadDocument = async (req, res) => {
 
         const pythonRes = await axios.post(`${PYTHON_URL}/process-image`, form, {
             headers: form.getHeaders(),
-            timeout: 60000
+            timeout: 120000  // 2 min — covers HF free-tier cold-start inference latency
         })
         const aiResult = pythonRes.data
 
@@ -180,7 +180,21 @@ exports.getDocuments = async (req, res) => {
 
 exports.getDocumentById = async (req, res) => {
     if (mongoose.connection.readyState !== 1) {
-        return res.status(503).json({ error: 'Database is offline' })
+        // DB offline: return a graceful degraded response instead of a bare 503 that blanks the UI
+        return res.status(200).json({
+            documentId: req.params.id,
+            fileName: 'Scan #' + req.params.id.slice(-6),
+            status: 'unknown',
+            forensicScore: null,
+            heatmap: null,
+            gradcam: null,
+            originalImage: null,
+            logicalWarnings: [],
+            logicalExplanation: '⚠️ Database is currently offline. Historical scan details are temporarily unavailable. Please re-upload the file to run a fresh analysis.',
+            structural: {},
+            layer: 'forensic',
+            _offlineFallback: true
+        })
     }
     try {
         const doc = await Document.findOne({ _id: req.params.id, userId: req.user.userId })

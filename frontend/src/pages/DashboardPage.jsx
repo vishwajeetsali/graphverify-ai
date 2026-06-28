@@ -11,16 +11,34 @@ export default function DashboardPage() {
     const [error, setError] = useState(null)
     const [uploadedFile, setUploadedFile] = useState(null)
     const [history, setHistory] = useState([])
+    const [historyError, setHistoryError] = useState(false)
+
+    // Auth guard — redirect immediately if JWT is missing or expired
+    useEffect(() => {
+        const token = localStorage.getItem('gv_token')
+        if (!token) {
+            navigate('/login')
+        }
+    }, [navigate])
 
     const fetchHistory = async () => {
+        setHistoryError(false)
         try {
             const res = await fetch('/api/documents', {
                 headers: { Authorization: `Bearer ${localStorage.getItem('gv_token')}` }
             })
+            if (res.status === 401) {
+                // Token expired mid-session — redirect to login
+                localStorage.removeItem('gv_token')
+                navigate('/login')
+                return
+            }
+            if (!res.ok) throw new Error(`History fetch failed: ${res.status}`)
             const data = await res.json()
             setHistory(data)
         } catch (err) {
             console.error('History fetch failed', err)
+            setHistoryError(true)
         }
     }
 
@@ -128,6 +146,13 @@ export default function DashboardPage() {
                         {error && (
                             <div style={styles.errorContainer}>
                                 <span>❌ {error}</span>
+                            </div>
+                        )}
+
+                        {historyError && (
+                            <div style={{ marginTop: '16px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span>⚠️</span>
+                                <span>Scan history temporarily unavailable. Upload a file to begin a fresh analysis.</span>
                             </div>
                         )}
 

@@ -12,11 +12,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5000", "http://localhost:5173", "http://localhost:3000",
-        "http://127.0.0.1:5000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins — covers Render→HF server calls and direct browser access
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -46,12 +43,13 @@ def get_inference_page():
             return HTMLResponse(content=f.read())
     return HTMLResponse(content="<h1>inference.html not found</h1>", status_code=404)
 
-@app.get("/gallery", response_class=HTMLResponse)
+@app.get("/gallery")
 def get_gallery_page():
+    # Use FileResponse (streaming) instead of reading the full 88MB file into memory
     html_path = os.path.join(os.path.dirname(__file__), "test_gallery.html")
     if os.path.exists(html_path):
-        with open(html_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
+        return FileResponse(html_path, media_type="text/html")
+    from fastapi.responses import HTMLResponse
     return HTMLResponse(content="<h1>test_gallery.html not found</h1>", status_code=404)
 
 @app.get("/health")
