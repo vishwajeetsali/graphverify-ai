@@ -11,13 +11,28 @@ const {
 
 // Helper to dynamically extract origin and hostname (RP ID) from request headers or environment variables
 function _getWebAuthnConfig(req) {
-    // Priority: Environment variables > Incoming Origin header > Local dev fallback
+    // Priority: Environment variables > Incoming Origin/Referer/Forwarded headers > Local dev fallback
     let origin = process.env.FRONTEND_URL
     let rpID = process.env.RP_ID
 
     if (!origin) {
-        origin = req.headers.origin || 'http://localhost:5173'
+        const forwardedHost = req.headers['x-forwarded-host']
+        const referer = req.headers.referer
+        if (forwardedHost) {
+            const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')
+            origin = `${proto}://${forwardedHost}`
+        } else if (referer) {
+            try {
+                const refUrl = new URL(referer)
+                origin = refUrl.origin
+            } catch (e) {
+                origin = req.headers.origin || 'http://localhost:5173'
+            }
+        } else {
+            origin = req.headers.origin || 'http://localhost:5173'
+        }
     }
+
     if (!rpID) {
         try {
             const url = new URL(origin)

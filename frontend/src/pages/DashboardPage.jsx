@@ -96,7 +96,7 @@ export default function DashboardPage() {
                     </div>
                 </div>
                 <div style={styles.headerRight}>
-                    <a href="http://localhost:8000/gallery" target="_blank" rel="noopener noreferrer" className="gallery-link">
+                    <a href={import.meta.env.VITE_PYTHON_SERVICE_URL ? `${import.meta.env.VITE_PYTHON_SERVICE_URL.replace(/\/$/, '')}/gallery` : "http://localhost:8000/gallery"} target="_blank" rel="noopener noreferrer" className="gallery-link">
                         🖼️ View Test Gallery
                     </a>
                     <button className="logout-btn" onClick={handleLogout}>
