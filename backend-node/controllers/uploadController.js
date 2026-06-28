@@ -71,59 +71,63 @@ exports.uploadDocument = async (req, res) => {
 
         const isDigitalPdf = req.file.mimetype === 'application/pdf' && aiResult.layer === 'digital_pdf'
 
-        let fusedScore   = aiResult.risk_score
-        let fusedForged  = aiResult.forged
+        let fusedScore      = Math.round(aiResult.risk_score)
+        let fusedForged     = !!aiResult.forged
+        let structuralScore = 0
+        let logicalScore    = 0
 
-        // Cascade gate: run structural/logical even on borderline clean scores (8% threshold instead of 15%)
-        // This ensures copy-move and row-deletion forgeries that ELA misses are still caught by layers 2+3
-        if (aiResult.risk_score >= 8.0 || isDigitalPdf) {
+        // Cascade gate — run downstream layers if:
+        // (a) visual score >= 8% (borderline cases), OR
+        // (b) structural layer already found anomalies (SIFT/row-gap fire in Python
+        //     before calibration squashes the L1 score, so we must not throw them away), OR
+        // (c) digital PDF (visual layer bypassed entirely)
+        const hasStructuralHits = (aiResult.structural?.anomaly_count || 0) > 0
+        if (aiResult.risk_score >= 8.0 || hasStructuralHits || isDigitalPdf) {
             const { checkLogic } = require('./logicController')
-            const ocrText = aiResult.structural?.ocr_text || ''
+            const ocrText  = aiResult.structural?.ocr_text  || ''
             const ocrWords = aiResult.structural?.ocr_words || []
 
             console.log('[LOGIC INPUT] Original originalname:', req.file.originalname)
             console.log('[LOGIC INPUT] OCR text length:', ocrText.length)
-            
+
             const logicResult = await checkLogic(
-                req.file.path, 
-                req.file.mimetype, 
+                req.file.path,
+                req.file.mimetype,
                 ocrText,
                 ocrWords,
                 req.file.originalname
             )
-            logicalWarnings = logicResult.warnings || []
+            logicalWarnings    = logicResult.warnings || []
             logicalExplanation = logicResult.explanation || null
 
             // ── CROSS-LAYER EVIDENCE FUSION ───────────────────────────────────
-            // If Layer 1 (ELA) was blind to the forgery (e.g. copy-move),
-            // Layers 2+3 can independently override the verdict.
             // fused_score = max(L1_visual, L2_structural × 0.35, L3_logic × 0.45)
-            const structuralScore = (() => {
+            structuralScore = (() => {
                 const level = aiResult.structural?.risk_level
                 if (level === 'HIGH')   return 85
                 if (level === 'MEDIUM') return 55
                 if (level === 'LOW')    return 30
                 return 0
             })()
-            const logicalScore = Math.min(100, (logicalWarnings?.length || 0) * 40)
-            fusedScore = Math.round(Math.max(
+            logicalScore = Math.min(100, (logicalWarnings?.length || 0) * 40)
+            fusedScore   = Math.round(Math.max(
                 aiResult.risk_score,
                 structuralScore * 0.35,
                 logicalScore * 0.45
             ))
-            fusedForged = fusedScore >= 30 || aiResult.forged
+            fusedForged = fusedScore >= 30 || !!aiResult.forged
             if (fusedForged && !aiResult.forged) {
-                console.log(`[FUSION OVERRIDE] L1=${aiResult.risk_score}% — fused=${fusedScore}% — overriding to FORGED`)
+                console.log(`[FUSION OVERRIDE] L1=${aiResult.risk_score}% struct=${structuralScore} logic=${logicalScore} fused=${fusedScore}% → FORGED`)
             }
 
             isStructuralAnomaly = ['HIGH', 'MEDIUM'].includes(aiResult.structural?.risk_level)
         } else {
-            console.log(`[CASCADE BYPASS] Visual risk score ${aiResult.risk_score}% < 8.0%. Bypassing structural/logical checks.`)
+            console.log(`[CASCADE BYPASS] Visual=${aiResult.risk_score}% < 8% and no structural hits. Bypassing logic.`)
             if (aiResult.structural) {
-                aiResult.structural.anomalies = []
+                aiResult.structural.anomalies     = []
                 aiResult.structural.anomaly_count = 0
-                aiResult.structural.risk_level = 'CLEAN'
-                aiResult.structural.overlay_b64 = null
+                aiResult.structural.risk_level    = 'CLEAN'
+                aiResult.structural.overlay_b64   = null
             }
         }
 
