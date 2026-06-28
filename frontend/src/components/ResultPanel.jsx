@@ -13,6 +13,7 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
     const [activeTab, setActiveTab] = useState('visual')
     const [visualMode, setVisualMode] = useState('heatmap')
     const [heatmapOpacity, setHeatmapOpacity] = useState(0.85)
+    const [scoreAnim, setScoreAnim] = useState(0)
 
     // Determine the document image preview source
     const [livePreviewSrc, setLivePreviewSrc] = useState(null)
@@ -36,6 +37,21 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
         }
     }, [uploadedFile])
 
+    // Animate score ring from 0 to actual score when result changes
+    useEffect(() => {
+        if (!result) { setScoreAnim(0); return }
+        setScoreAnim(0)
+        const target = result.forensicScore || 0
+        let frame = 0
+        const total = 40
+        const tick = () => {
+            frame++
+            setScoreAnim(Math.round(target * (frame / total)))
+            if (frame < total) requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+    }, [result])
+
     if (loading) {
         return (
             <div style={styles.panel}>
@@ -51,6 +67,86 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
     const { forensicScore, status, heatmap, gradcam, logicalWarnings, logicalExplanation, structural, pdfMetadata, documentId, layer, originalImage } = result
     const isFlagged = status === 'flagged'
     const isDigitalPdf = layer === 'digital_pdf'
+    const ttaScores = result.tta_scores || []
+
+    // Score ring geometry
+    const RING_R = 36, RING_STROKE = 7
+    const circumference = 2 * Math.PI * RING_R
+    const ringOffset = circumference - (scoreAnim / 100) * circumference
+    const ringColor = scoreAnim > 60 ? '#f43f5e' : scoreAnim > 30 ? '#fbbf24' : '#10b981'
+
+    // Generate & open forensic report in new window
+    const generateReport = () => {
+        const ts = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+        const flagList = (logicalWarnings || []).map(w => `<li>${w.message || w}</li>`).join('')
+        const structAnomalies = (structural?.anomalies || []).map(a =>
+            `<li><strong>${a.type}</strong> — ${a.detail || ''} (${a.severity || ''} severity)</li>`
+        ).join('')
+        const metaFlags = (pdfMetadata?.flags || []).map(f =>
+            `<li><strong>${f.type.replace(/_/g,' ')}</strong> [${f.severity}] — ${f.detail}</li>`
+        ).join('')
+        const ttaList = ttaScores.map((s,i) => `TTA Pass ${i+1}: ${(s*100).toFixed(1)}%`).join(' | ')
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>GraphVerify AI — Forensic Report</title>
+<style>
+  body{font-family:'Segoe UI',Arial,sans-serif;margin:40px;color:#111;line-height:1.6;max-width:780px}
+  h1{color:#1e3a5f;border-bottom:3px solid #1e3a5f;padding-bottom:8px}
+  h2{color:#1e3a5f;margin-top:28px;font-size:15px;text-transform:uppercase;letter-spacing:1px}
+  .verdict{font-size:22px;font-weight:800;padding:14px 20px;border-radius:8px;margin:16px 0}
+  .forged{background:#fef2f2;color:#dc2626;border:2px solid #dc2626}
+  .clean{background:#f0fdf4;color:#16a34a;border:2px solid #16a34a}
+  .meta{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin:10px 0;font-size:13px}
+  ul{margin:8px 0;padding-left:20px} li{margin:4px 0;font-size:13px}
+  .score{font-size:32px;font-weight:900;color:${isFlagged?'#dc2626':'#16a34a'}}
+  .footer{margin-top:40px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11px;color:#6b7280}
+  @media print{body{margin:20px}}
+</style></head><body>
+<h1>🔬 GraphVerify AI — Forensic Analysis Report</h1>
+<div class="meta">
+  <strong>Document:</strong> ${result.fileName || uploadedFile?.name || 'Unknown'}<br>
+  <strong>Scan ID:</strong> ${documentId || '—'}<br>
+  <strong>Timestamp:</strong> ${ts}<br>
+  <strong>Analysis Layer:</strong> ${layer || 'forensic'}
+</div>
+
+<div class="verdict ${isFlagged?'forged':'clean'}">
+  ${isFlagged ? '🚨 POTENTIAL FORGERY DETECTED' : '✅ DOCUMENT VERIFIED — CLEAN'}
+</div>
+
+<h2>Layer 1 — Visual Forensic Score</h2>
+<p class="score">${forensicScore}%</p>
+<p>Compression profile: <strong>${forensicScore > 50 ? 'Anomaly Detected' : 'Normal / Consistent'}</strong></p>
+${ttaList ? `<p style="font-size:12px;color:#555">TTA Confidence Breakdown: ${ttaList}</p>` : ''}
+
+<h2>Layer 2 — Structural Graph Analysis</h2>
+<p>Risk Level: <strong>${structural?.risk_level || 'CLEAN'}</strong> | Layout Contradictions: <strong>${structural?.anomaly_count || 0}</strong> | Words Scanned: <strong>${structural?.words_found || 0}</strong></p>
+${structAnomalies ? `<ul>${structAnomalies}</ul>` : '<p>No structural anomalies detected.</p>'}
+
+<h2>Layer 3 — Mathematical Reconciliation</h2>
+${flagList ? `<ul>${flagList}</ul>` : '<p>All transaction balances reconcile within ±₹1.00 tolerance.</p>'}
+${logicalExplanation ? `<div class="meta"><strong>AI Audit Summary:</strong><br>${logicalExplanation}</div>` : ''}
+
+${isDigitalPdf && pdfMetadata ? `
+<h2>Layer 4 — PDF Metadata Forensics</h2>
+<p>Metadata Risk: <strong>${pdfMetadata.risk_level}</strong> | Flags: <strong>${pdfMetadata.flag_count}</strong></p>
+${metaFlags ? `<ul>${metaFlags}</ul>` : '<p>No metadata tampering signals detected.</p>'}
+<div class="meta" style="font-size:12px">
+  Producer: ${pdfMetadata.raw_metadata?.producer||'—'} | Creator: ${pdfMetadata.raw_metadata?.creator||'—'}<br>
+  Created: ${pdfMetadata.raw_metadata?.created||'—'} | Modified: ${pdfMetadata.raw_metadata?.modified||'—'}
+</div>` : ''}
+
+<div class="footer">
+  Generated by GraphVerify AI — SuRaksha Forensic Auditing Suite<br>
+  This report is for informational purposes. Findings should be reviewed by a qualified forensic analyst.
+</div>
+</body></html>`
+
+        const w = window.open('', '_blank')
+        w.document.write(html)
+        w.document.close()
+        setTimeout(() => w.print(), 400)
+    }
 
 
     // Fallback: If no live file uploaded (historical scan), use originalImage or the structural overlay as the base preview
@@ -72,15 +168,45 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
                 background: isFlagged ? 'var(--danger-glow)' : 'var(--success-glow)',
                 borderBottom: `1px solid ${isFlagged ? 'rgba(244,63,94,0.2)' : 'rgba(16,185,129,0.2)'}`
             }}>
-                <span style={styles.bannerIcon}>{isFlagged ? '🚨' : '✅'}</span>
+                {/* Animated Score Ring */}
+                <svg width="86" height="86" style={{ flexShrink: 0 }}>
+                    <circle cx="43" cy="43" r={RING_R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={RING_STROKE} />
+                    <circle
+                        cx="43" cy="43" r={RING_R}
+                        fill="none"
+                        stroke={ringColor}
+                        strokeWidth={RING_STROKE}
+                        strokeDasharray={circumference}
+                        strokeDashoffset={ringOffset}
+                        strokeLinecap="round"
+                        transform="rotate(-90 43 43)"
+                        style={{ transition: 'stroke 0.3s', filter: `drop-shadow(0 0 6px ${ringColor})` }}
+                    />
+                    <text x="43" y="43" textAnchor="middle" dominantBaseline="central" fill={ringColor} fontSize="13" fontWeight="800">{scoreAnim}%</text>
+                </svg>
+
                 <div style={{ flex: 1 }}>
                     <h3 style={{ color: isFlagged ? 'var(--danger)' : 'var(--success)', fontSize: '15px', margin: 0, fontWeight: '800', letterSpacing: '0.01em' }}>
                         {isFlagged ? 'ANOMALIES & POTENTIAL FORGERY DETECTED' : 'DOCUMENT VERIFIED — CLEAN'}
                     </h3>
                     <p style={styles.bannerSub}>
-                        Visual Risk: <strong style={{ color: isFlagged ? 'var(--danger)' : 'var(--success)' }}>{forensicScore}%</strong> | Structural: <strong style={{ color: structural?.risk_level === 'HIGH' || structural?.risk_level === 'MEDIUM' ? 'var(--warning)' : 'var(--success)' }}>{structural?.risk_level || 'CLEAN'}</strong> | ID: <span style={{ color: '#fff' }}>{documentId}</span>
+                        Structural: <strong style={{ color: structural?.risk_level === 'HIGH' || structural?.risk_level === 'MEDIUM' ? 'var(--warning)' : 'var(--success)' }}>{structural?.risk_level || 'CLEAN'}</strong>
+                        {' '}&nbsp;|&nbsp;{' '}
+                        Logic Flags: <strong style={{ color: (logicalWarnings||[]).length > 0 ? 'var(--warning)' : 'var(--success)' }}>{(logicalWarnings||[]).length}</strong>
+                        {' '}&nbsp;|&nbsp;{' '}
+                        ID: <span style={{ color: '#fff' }}>{documentId}</span>
                     </p>
                 </div>
+
+                <button
+                    onClick={generateReport}
+                    title="Download Forensic Report"
+                    style={{ flexShrink: 0, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#d1d5db', cursor: 'pointer', fontSize: '11px', fontWeight: '700', padding: '7px 12px', letterSpacing: '0.02em', whiteSpace: 'nowrap' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
+                >
+                    📄 Export Report
+                </button>
             </div>
 
             {/* Split screen */}
@@ -272,6 +398,28 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
                                                 </p>
                                             </div>
                                         </div>
+
+                                        {/* TTA Confidence Bar Chart */}
+                                        {ttaScores.length > 0 && (
+                                            <div style={{ marginTop: '14px', padding: '12px 14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px' }}>
+                                                <p style={{ color: '#6b7280', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>TTA Confidence — {ttaScores.length} Augmentation Passes</p>
+                                                <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end', height: '44px' }}>
+                                                    {ttaScores.map((s, i) => {
+                                                        const pct = Math.round(s * 100)
+                                                        const barColor = pct > 60 ? '#f43f5e' : pct > 30 ? '#fbbf24' : '#10b981'
+                                                        return (
+                                                            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                                                                <span style={{ fontSize: '9px', color: '#6b7280', fontWeight: '600' }}>{pct}%</span>
+                                                                <div style={{ width: '100%', height: `${Math.max(4, pct * 0.36)}px`, background: barColor, borderRadius: '3px 3px 0 0', boxShadow: `0 0 6px ${barColor}55`, transition: 'height 0.4s ease' }} />
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                                                    {ttaScores.map((_, i) => <span key={i} style={{ flex: 1, textAlign: 'center', fontSize: '9px', color: '#374151' }}>P{i+1}</span>)}
+                                                </div>
+                                            </div>
+                                        )}
 
                                         {heatmap ? (
                                             <div style={styles.hintContainer}>

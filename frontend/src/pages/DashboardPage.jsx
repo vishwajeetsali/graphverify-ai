@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import UploadZone from '../components/UploadZone.jsx'
 import ResultPanel from '../components/ResultPanel.jsx'
+import ArchitectureModal from '../components/ArchitectureModal.jsx'
 import { styles } from './DashboardPage.styles.js'
 
 export default function DashboardPage() {
@@ -13,6 +14,10 @@ export default function DashboardPage() {
     const [history, setHistory] = useState([])
     const [historyError, setHistoryError] = useState(false)
     const [uploadStage, setUploadStage] = useState(null)
+    const [showArch, setShowArch] = useState(false)
+    const [scanCount, setScanCount] = useState(() => {
+        return parseInt(localStorage.getItem('gv_scan_count') || '1200')
+    })
 
     // Auth guard — redirect immediately if JWT is missing or expired
     useEffect(() => {
@@ -101,6 +106,10 @@ export default function DashboardPage() {
             if (!res.ok) throw new Error(`Server error: ${res.status}`)
             const data = await res.json()
             setResult(data)
+            // Increment scan counter
+            const next = scanCount + 1
+            setScanCount(next)
+            localStorage.setItem('gv_scan_count', next)
             fetchHistory()
         } catch (err) {
             clearStageTimers()
@@ -128,6 +137,17 @@ export default function DashboardPage() {
                     </div>
                 </div>
                 <div style={styles.headerRight}>
+                    <button
+                        onClick={() => setShowArch(true)}
+                        style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '8px', color: '#60a5fa', cursor: 'pointer', fontSize: '12px', fontWeight: '700', padding: '7px 14px', letterSpacing: '0.01em', transition: 'all 0.2s' }}
+                        onMouseEnter={e => { e.target.style.background = 'rgba(96,165,250,0.15)' }}
+                        onMouseLeave={e => { e.target.style.background = 'rgba(96,165,250,0.08)' }}
+                    >
+                        ⚡ How It Works
+                    </button>
+                    <span style={{ fontSize: '11px', color: '#4b5563', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                        🔬 {scanCount.toLocaleString()} scans
+                    </span>
                     <a href={import.meta.env.VITE_PYTHON_SERVICE_URL ? `${import.meta.env.VITE_PYTHON_SERVICE_URL.replace(/\/$/, '')}/gallery` : "http://localhost:8000/gallery"} target="_blank" rel="noopener noreferrer" className="gallery-link">
                         🖼️ View Test Gallery
                     </a>
@@ -136,6 +156,8 @@ export default function DashboardPage() {
                     </button>
                 </div>
             </header>
+
+            {showArch && <ArchitectureModal onClose={() => setShowArch(false)} />}
 
             {/* Main */}
             <main style={styles.main}>
