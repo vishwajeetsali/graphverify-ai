@@ -142,10 +142,15 @@ ${metaFlags ? `<ul>${metaFlags}</ul>` : '<p>No metadata tampering signals detect
 </div>
 </body></html>`
 
-        const w = window.open('', '_blank')
-        w.document.write(html)
-        w.document.close()
-        setTimeout(() => w.print(), 400)
+        const blob = new Blob([html], { type: 'text/html' })
+        const url  = URL.createObjectURL(blob)
+        const a    = document.createElement('a')
+        a.href     = url
+        a.download = `forensic-report-${documentId || 'scan'}.html`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
     }
 
 
