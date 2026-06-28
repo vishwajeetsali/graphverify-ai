@@ -12,6 +12,7 @@ export default function DashboardPage() {
     const [uploadedFile, setUploadedFile] = useState(null)
     const [history, setHistory] = useState([])
     const [historyError, setHistoryError] = useState(false)
+    const [uploadStage, setUploadStage] = useState(null)
 
     // Auth guard — redirect immediately if JWT is missing or expired
     useEffect(() => {
@@ -73,6 +74,16 @@ export default function DashboardPage() {
         setError(null)
         setResult(null)
         setUploadedFile(file)
+        setUploadStage('📤 Uploading document to forensic pipeline...')
+
+        // Time-gated stage messages — matches actual per-layer latency
+        const stageTimers = [
+            setTimeout(() => setUploadStage('🔬 Layer 1: Running ELA + SRM + DCT visual analysis...'), 3000),
+            setTimeout(() => setUploadStage('🕸️ Layer 2: Extracting spatial OCR bounding graph...'), 18000),
+            setTimeout(() => setUploadStage('🧮 Layer 3: Running mathematical reconciliation audit...'), 35000),
+            setTimeout(() => setUploadStage('⏳ Deep inference in progress — HF cold-start can take up to 2 min...'), 65000),
+        ]
+        const clearStageTimers = () => stageTimers.forEach(t => clearTimeout(t))
 
         try {
             const formData = new FormData()
@@ -86,14 +97,17 @@ export default function DashboardPage() {
                 body: formData
             })
 
+            clearStageTimers()
             if (!res.ok) throw new Error(`Server error: ${res.status}`)
             const data = await res.json()
             setResult(data)
             fetchHistory()
         } catch (err) {
+            clearStageTimers()
             setError(err.message)
         } finally {
             setLoading(false)
+            setUploadStage(null)
         }
     }
 
@@ -141,7 +155,13 @@ export default function DashboardPage() {
                         </div>
                         <UploadZone onUpload={handleUpload} loading={loading} />
 
-
+                        {/* Live pipeline stage progress */}
+                        {uploadStage && (
+                            <div style={{ marginTop: '14px', padding: '12px 16px', borderRadius: '10px', background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.2)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#60a5fa', flexShrink: 0, animation: 'pulse 1.2s ease-in-out infinite' }} />
+                                <span style={{ color: '#93c5fd', fontSize: '12px', fontWeight: '600', letterSpacing: '0.01em' }}>{uploadStage}</span>
+                            </div>
+                        )}
 
                         {error && (
                             <div style={styles.errorContainer}>

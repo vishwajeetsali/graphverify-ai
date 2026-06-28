@@ -143,6 +143,7 @@ exports.uploadDocument = async (req, res) => {
             logicalWarnings,
             logicalExplanation,
             structural: aiResult.structural || {},
+            pdfMetadata: aiResult.pdf_metadata || null,
             layer: aiResult.layer
         })
 
@@ -214,6 +215,7 @@ exports.getDocumentById = async (req, res) => {
             logicalWarnings: doc.logicalWarnings || [],
             logicalExplanation: doc.logicalExplanation || null,
             structural: doc.structural || {},
+            pdfMetadata: doc.pdfMetadata || null,
             layer: 'forensic'
         })
     } catch (err) {

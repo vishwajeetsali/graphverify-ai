@@ -48,8 +48,9 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
 
     if (!result) return null
 
-    const { forensicScore, status, heatmap, gradcam, logicalWarnings, logicalExplanation, structural, documentId, layer, originalImage } = result
+    const { forensicScore, status, heatmap, gradcam, logicalWarnings, logicalExplanation, structural, pdfMetadata, documentId, layer, originalImage } = result
     const isFlagged = status === 'flagged'
+    const isDigitalPdf = layer === 'digital_pdf'
 
 
     // Fallback: If no live file uploaded (historical scan), use originalImage or the structural overlay as the base preview
@@ -199,6 +200,19 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
                         >
                             🧮 Layer 3: Logical
                         </button>
+                        {isDigitalPdf && (
+                            <button
+                                style={{ ...styles.tab, ...(activeTab === 'metadata' ? styles.tabActive : {}), borderColor: pdfMetadata?.risk_level === 'HIGH' ? 'rgba(244,63,94,0.4)' : 'rgba(96,165,250,0.4)' }}
+                                onClick={() => setActiveTab('metadata')}
+                            >
+                                📋 PDF Metadata
+                                {pdfMetadata?.flag_count > 0 && (
+                                    <span style={{ marginLeft: '6px', background: 'var(--danger)', color: '#fff', borderRadius: '999px', fontSize: '10px', padding: '1px 6px', fontWeight: '800' }}>
+                                        {pdfMetadata.flag_count}
+                                    </span>
+                                )}
+                            </button>
+                        )}
                     </div>
 
                     {/* Tab Content */}
@@ -211,56 +225,71 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
                                     <h4 style={styles.layerTitle}>Neural Texture & Error Level Analysis</h4>
                                     <span style={{
                                         ...styles.badge,
-                                        background: layer === 'forensic_classical_cv' ? 'var(--warning-glow)' : 'var(--primary-glow)',
-                                        color: layer === 'forensic_classical_cv' ? 'var(--warning)' : 'var(--primary-light)',
-                                        borderColor: layer === 'forensic_classical_cv' ? 'rgba(251,191,36,0.3)' : 'rgba(96,165,250,0.3)'
+                                        background: isDigitalPdf ? 'rgba(139,92,246,0.15)' : layer === 'forensic_classical_cv' ? 'var(--warning-glow)' : 'var(--primary-glow)',
+                                        color: isDigitalPdf ? '#a78bfa' : layer === 'forensic_classical_cv' ? 'var(--warning)' : 'var(--primary-light)',
+                                        borderColor: isDigitalPdf ? 'rgba(139,92,246,0.3)' : layer === 'forensic_classical_cv' ? 'rgba(251,191,36,0.3)' : 'rgba(96,165,250,0.3)'
                                     }}>
-                                        {layer === 'forensic_classical_cv' ? 'Classical CV' : 'Deep CNN Mode'}
+                                        {isDigitalPdf ? 'Bypassed — Digital PDF' : layer === 'forensic_classical_cv' ? 'Classical CV' : 'Deep CNN Mode'}
                                     </span>
                                 </div>
-                                <p style={styles.layerDesc}>
-                                    Evaluates pixel-level noise discrepancies, high-pass SRM frequency residuals, and local compression thresholds to flag spliced components.
-                                </p>
 
-                                {/* Opacity Control */}
-                                {heatmap && visualMode === 'heatmap' && (
-                                    <div style={styles.opacityWrapper}>
-                                        <span style={styles.opacityLabel}>Heatmap Opacity:</span>
-                                        <input type="range" min="0" max="1" step="0.05" value={heatmapOpacity} onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))} style={styles.slider} />
-                                        <span style={styles.opacityValue}>{Math.round(heatmapOpacity * 100)}%</span>
-                                    </div>
-                                )}
-
-                                <div style={styles.metricRow}>
-                                    <div style={styles.metricCard}>
-                                        <p style={styles.metricLabel}>Visual Forgery Index</p>
-                                        <p style={{ ...styles.metricValue, color: forensicScore > 50 ? 'var(--danger)' : 'var(--success)' }}>
-                                            {forensicScore}%
-                                        </p>
-                                    </div>
-                                    <div style={styles.metricCard}>
-                                        <p style={styles.metricLabel}>Compression Profile</p>
-                                        <p style={{ ...styles.metricValueText, color: forensicScore > 50 ? 'var(--danger)' : 'var(--success)' }}>
-                                            {forensicScore > 50 ? 'Anomaly Detected' : 'Normal / Consistent'}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {heatmap ? (
-                                    <div style={styles.hintContainer}>
-                                        <span style={{ fontSize: '14px' }}>💡</span>
-                                        <p style={styles.hintText}>
-                                            {visualMode === 'gradcam'
-                                                ? 'Grad-CAM Attention Highlights: Bright cyan/green spots reveal visual regions that the classifier focused on to make its judgment.'
-                                                : 'U-Net++ Forgery Segments: Glowing red boundaries pinpoint exact coordinates of digital modifications.'
-                                            }
+                                {isDigitalPdf ? (
+                                    <div style={{ padding: '20px', borderRadius: '12px', background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.15)', marginTop: '12px' }}>
+                                        <p style={{ color: '#a78bfa', fontWeight: '700', fontSize: '13px', marginBottom: '8px' }}>🔄 Visual Analysis Rerouted</p>
+                                        <p style={{ color: '#9ca3af', fontSize: '12px', lineHeight: '1.6' }}>
+                                            This is a native digital PDF with selectable text. ELA (Error Level Analysis) is a JPEG-compression signal and is
+                                            inapplicable to vector documents. The pipeline has automatically routed to <strong style={{color:'#c4b5fd'}}>PDF Metadata Forensics</strong> and
+                                            <strong style={{color:'#c4b5fd'}}> Mathematical Reconciliation</strong> — both more reliable for digitally-native documents.
+                                            Check the <strong style={{color:'#c4b5fd'}}>📋 PDF Metadata</strong> tab for cryptographic tampering signals.
                                         </p>
                                     </div>
                                 ) : (
-                                    <div style={styles.emptyState}>
-                                        <p style={{ color: 'var(--success)', margin: 0, fontWeight: '700' }}>No Visual Anomalies</p>
-                                        <span style={styles.mutedText}>All frequency textures are structurally organic.</span>
-                                    </div>
+                                    <>
+                                        <p style={styles.layerDesc}>
+                                            Evaluates pixel-level noise discrepancies, high-pass SRM frequency residuals, and local compression thresholds to flag spliced components.
+                                        </p>
+
+                                        {/* Opacity Control */}
+                                        {heatmap && visualMode === 'heatmap' && (
+                                            <div style={styles.opacityWrapper}>
+                                                <span style={styles.opacityLabel}>Heatmap Opacity:</span>
+                                                <input type="range" min="0" max="1" step="0.05" value={heatmapOpacity} onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))} style={styles.slider} />
+                                                <span style={styles.opacityValue}>{Math.round(heatmapOpacity * 100)}%</span>
+                                            </div>
+                                        )}
+
+                                        <div style={styles.metricRow}>
+                                            <div style={styles.metricCard}>
+                                                <p style={styles.metricLabel}>Visual Forgery Index</p>
+                                                <p style={{ ...styles.metricValue, color: forensicScore > 50 ? 'var(--danger)' : 'var(--success)' }}>
+                                                    {forensicScore}%
+                                                </p>
+                                            </div>
+                                            <div style={styles.metricCard}>
+                                                <p style={styles.metricLabel}>Compression Profile</p>
+                                                <p style={{ ...styles.metricValueText, color: forensicScore > 50 ? 'var(--danger)' : 'var(--success)' }}>
+                                                    {forensicScore > 50 ? 'Anomaly Detected' : 'Normal / Consistent'}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {heatmap ? (
+                                            <div style={styles.hintContainer}>
+                                                <span style={{ fontSize: '14px' }}>💡</span>
+                                                <p style={styles.hintText}>
+                                                    {visualMode === 'gradcam'
+                                                        ? 'Grad-CAM Attention Highlights: Bright cyan/green spots reveal visual regions that the classifier focused on to make its judgment.'
+                                                        : 'U-Net++ Forgery Segments: Glowing red boundaries pinpoint exact coordinates of digital modifications.'
+                                                    }
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div style={styles.emptyState}>
+                                                <p style={{ color: 'var(--success)', margin: 0, fontWeight: '700' }}>No Visual Anomalies</p>
+                                                <span style={styles.mutedText}>All frequency textures are structurally organic.</span>
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                             </div>
                         )}
@@ -383,6 +412,73 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
                                         )}
                                     </p>
                                 </div>
+                            </div>
+                        )}
+
+                        {/* PDF Metadata Forensics Tab — digital PDFs only */}
+                        {activeTab === 'metadata' && isDigitalPdf && (
+                            <div style={styles.tabPanelWrapper}>
+                                <div style={styles.layerHeader}>
+                                    <h4 style={styles.layerTitle}>PDF Metadata Forensics</h4>
+                                    <span style={{
+                                        ...styles.badge,
+                                        background: pdfMetadata?.risk_level === 'HIGH' ? 'var(--danger-glow)' : pdfMetadata?.risk_level === 'MEDIUM' ? 'var(--warning-glow)' : 'var(--success-glow)',
+                                        color: pdfMetadata?.risk_level === 'HIGH' ? 'var(--danger)' : pdfMetadata?.risk_level === 'MEDIUM' ? 'var(--warning)' : 'var(--success)',
+                                        borderColor: pdfMetadata?.risk_level === 'HIGH' ? 'rgba(244,63,94,0.3)' : pdfMetadata?.risk_level === 'MEDIUM' ? 'rgba(251,191,36,0.3)' : 'rgba(16,185,129,0.3)'
+                                    }}>
+                                        {pdfMetadata?.risk_level || 'CLEAN'} RISK
+                                    </span>
+                                </div>
+                                <p style={styles.layerDesc}>
+                                    Inspects embedded PDF metadata for post-issuance modification timestamps, suspicious producer software, and structural integrity signals invisible to visual analysis.
+                                </p>
+
+                                {pdfMetadata?.flags && pdfMetadata.flags.length > 0 ? (
+                                    <div style={styles.warningList}>
+                                        <p style={{ color: 'var(--warning)', fontSize: '12px', fontWeight: '700', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+                                            Tampering Signals Detected:
+                                        </p>
+                                        {pdfMetadata.flags.map((flag, i) => (
+                                            <div key={i} style={{ ...styles.anomalyItem, marginBottom: '10px' }}>
+                                                <div style={styles.anomalyHeader}>
+                                                    <span style={styles.anomalyType}>⚠️ {flag.type.replace(/_/g, ' ')}</span>
+                                                    <span style={{
+                                                        ...styles.anomalySeverity,
+                                                        background: flag.severity === 'HIGH' ? 'var(--danger-glow)' : 'var(--warning-glow)',
+                                                        color: flag.severity === 'HIGH' ? 'var(--danger)' : 'var(--warning)'
+                                                    }}>
+                                                        {flag.severity}
+                                                    </span>
+                                                </div>
+                                                <p style={styles.anomalyDetail}>{flag.detail}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div style={{ ...styles.emptyState, height: '80px' }}>
+                                        <p style={{ color: 'var(--success)', margin: 0, fontWeight: '700' }}>✅ Metadata Integrity Verified</p>
+                                        <span style={styles.mutedText}>No post-issuance modification or suspicious producer signals detected.</span>
+                                    </div>
+                                )}
+
+                                {pdfMetadata?.raw_metadata && (
+                                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px', marginTop: '12px' }}>
+                                        <p style={{ color: '#6b7280', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>Raw Metadata Dump</p>
+                                        {[
+                                            ['Producer', pdfMetadata.raw_metadata.producer || '—'],
+                                            ['Creator',  pdfMetadata.raw_metadata.creator  || '—'],
+                                            ['Created',  pdfMetadata.raw_metadata.created  || '—'],
+                                            ['Modified', pdfMetadata.raw_metadata.modified || '—'],
+                                            ['Pages',    pdfMetadata.raw_metadata.page_count ?? '—'],
+                                            ['Encrypted',pdfMetadata.raw_metadata.encrypted ? 'Yes ⚠️' : 'No'],
+                                        ].map(([label, value]) => (
+                                            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '12px' }}>
+                                                <span style={{ color: '#6b7280', fontWeight: '600' }}>{label}</span>
+                                                <span style={{ color: '#d1d5db', fontFamily: 'monospace', maxWidth: '60%', textAlign: 'right', wordBreak: 'break-all' }}>{String(value)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
 

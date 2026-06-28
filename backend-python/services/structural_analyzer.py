@@ -59,7 +59,7 @@ def _decode_image(image_bytes: bytes):
             import fitz
             doc  = fitz.open(stream=image_bytes, filetype="pdf")
             page = doc[0]
-            pix  = page.get_pixmap(dpi=150)
+            pix  = page.get_pixmap(dpi=300)  # 300 DPI — better OCR accuracy for tampered digit detection
             arr2 = np.frombuffer(pix.tobytes("png"), np.uint8)
             img  = cv2.imdecode(arr2, cv2.IMREAD_COLOR)
         except Exception:
@@ -402,6 +402,134 @@ def _draw_anomaly_overlay(img_bgr, boxes, anomalies):
 
     _, buf     = cv2.imencode('.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return base64.b64encode(buf).decode('utf-8')
+
+
+# ── PDF METADATA FORENSICS ─────────────────────────────────────────────────
+
+def analyze_pdf_metadata(image_bytes: bytes) -> dict:
+    """
+    Forensically analyze PDF metadata for post-issuance tampering signals.
+    Used exclusively on digital PDFs where visual ELA is inapplicable.
+
+    Detects:
+      - Post-issuance modification (modDate > creationDate)
+      - Suspicious producer software (Word, LibreOffice, etc.)
+      - PDF structure repairs (sign of unauthorized editing)
+      - Unexpected encryption state
+    """
+    try:
+        import fitz
+        from datetime import datetime
+
+        doc      = fitz.open(stream=image_bytes, filetype="pdf")
+        metadata = doc.metadata
+        flags    = []
+
+        # 1. Post-issuance modification check
+        created  = metadata.get('creationDate', '') or ''
+        modified = metadata.get('modDate', '')      or ''
+
+        def _parse_pdf_date(d: str):
+            try:
+                d = d.replace('D:', '').strip()[:14]
+                return datetime.strptime(d, '%Y%m%d%H%M%S')
+            except Exception:
+                return None
+
+        created_dt  = _parse_pdf_date(created)
+        modified_dt = _parse_pdf_date(modified)
+
+        if created_dt and modified_dt and modified_dt > created_dt:
+            delta = modified_dt - created_dt
+            flags.append({
+                'type':     'POST_ISSUANCE_MODIFICATION',
+                'severity': 'HIGH',
+                'detail':   (
+                    f"Document modified {delta.days} day(s) "
+                    f"{delta.seconds // 3600}h after creation. "
+                    f"Created: {created_dt.strftime('%Y-%m-%d %H:%M')} — "
+                    f"Modified: {modified_dt.strftime('%Y-%m-%d %H:%M')}"
+                )
+            })
+
+        # 2. Suspicious producer / creator software
+        producer = metadata.get('producer', '') or ''
+        creator  = metadata.get('creator',  '') or ''
+        combined = (producer + ' ' + creator).lower()
+
+        SUSPICIOUS_APPS = [
+            ('microsoft word',   'Word processor'),
+            ('libreoffice',      'LibreOffice'),
+            ('openoffice',       'OpenOffice'),
+            ('google docs',      'Google Docs'),
+            ('wps',              'WPS Office'),
+            ('canva',            'Canva'),
+            ('adobe photoshop',  'Photoshop'),
+            ('gimp',             'GIMP image editor'),
+        ]
+        for keyword, label in SUSPICIOUS_APPS:
+            if keyword in combined:
+                flags.append({
+                    'type':     'SUSPICIOUS_PRODUCER_SOFTWARE',
+                    'severity': 'MEDIUM',
+                    'detail':   (
+                        f"Document produced by '{label}' — "
+                        f"inconsistent with bank-issued statement software. "
+                        f"Producer: '{producer}' | Creator: '{creator}'"
+                    )
+                })
+                break
+
+        # 3. PDF structure was repaired on open (sign of file corruption from unauthorized editing)
+        if doc.is_repaired:
+            flags.append({
+                'type':     'PDF_STRUCTURE_REPAIRED',
+                'severity': 'MEDIUM',
+                'detail':   'PDF internal cross-reference table was repaired on open — '
+                            'indicates possible file corruption from unauthorized binary editing.'
+            })
+
+        # 4. Unexpected encryption on a bank statement
+        if doc.needs_pass:
+            flags.append({
+                'type':     'UNEXPECTED_ENCRYPTION',
+                'severity': 'LOW',
+                'detail':   'Document requires a password — unusual for standard bank-issued statements.'
+            })
+
+        # Risk level
+        high_count   = sum(1 for f in flags if f['severity'] == 'HIGH')
+        medium_count = sum(1 for f in flags if f['severity'] == 'MEDIUM')
+
+        if high_count >= 1:
+            risk_level = 'HIGH'
+        elif medium_count >= 1:
+            risk_level = 'MEDIUM'
+        else:
+            risk_level = 'CLEAN'
+
+        return {
+            'flags':       flags,
+            'flag_count':  len(flags),
+            'risk_level':  risk_level,
+            'raw_metadata': {
+                'producer':   producer,
+                'creator':    creator,
+                'created':    created,
+                'modified':   modified,
+                'page_count': len(doc),
+                'encrypted':  doc.needs_pass,
+            }
+        }
+
+    except Exception as e:
+        return {
+            'flags':      [],
+            'flag_count': 0,
+            'risk_level': 'CLEAN',
+            'error':      str(e),
+            'raw_metadata': {}
+        }
 
 
 # ── MAIN EXPORT ────────────────────────────────────────────────────────────

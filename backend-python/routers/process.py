@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from services.inference import run_pipeline, CLASSICAL_MODE
-from services.structural_analyzer import analyze_structure
+from services.structural_analyzer import analyze_structure, analyze_pdf_metadata
 
 router = APIRouter()
 MODELS_LOADED = not CLASSICAL_MODE
@@ -16,8 +16,11 @@ async def process_image(file: UploadFile = File(...)):
     # Layer 1 — Visual (ELA + SRM + DCT + EfficientNet + U-Net)
     visual_result = run_pipeline(image_bytes, file.filename)
 
-    # Layer 3 — Structural (spatial graph anomaly detection)
-    if visual_result.get('layer') == 'digital_pdf':
+    is_digital_pdf = visual_result.get('layer') == 'digital_pdf'
+
+    # Layer 2 — Structural (spatial graph anomaly detection)
+    # Layer 4 — PDF Metadata Forensics (digital PDFs only — where visual ELA is inapplicable)
+    if is_digital_pdf:
         structural_result = {
             'anomalies': [],
             'anomaly_count': 0,
@@ -27,8 +30,10 @@ async def process_image(file: UploadFile = File(...)):
             'ocr_text': '',
             'ocr_words': []
         }
+        pdf_metadata_result = analyze_pdf_metadata(image_bytes)
     else:
-        structural_result = analyze_structure(image_bytes)
+        structural_result    = analyze_structure(image_bytes)
+        pdf_metadata_result  = None
 
     return {
         # Visual layer
@@ -48,5 +53,8 @@ async def process_image(file: UploadFile = File(...)):
             'words_found':   structural_result.get('words_found', 0),
             'ocr_text':      structural_result.get('ocr_text', ''),
             'ocr_words':     structural_result.get('ocr_words', []),
-        }
-    }
+        },
+
+        # PDF Metadata Forensics layer (populated only for digital PDFs)
+        'pdf_metadata': pdf_metadata_result,
+    }

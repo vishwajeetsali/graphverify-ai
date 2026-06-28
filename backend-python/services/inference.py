@@ -196,7 +196,7 @@ def _decode_image(image_bytes: bytes):
             import fitz
             doc  = fitz.open(stream=image_bytes, filetype="pdf")
             page = doc[0]
-            pix  = page.get_pixmap(dpi=150)
+            pix  = page.get_pixmap(dpi=300)  # 300 DPI — higher res for better ELA/SRM/DCT signal
             arr2 = np.frombuffer(pix.tobytes("png"), np.uint8)
             orig = cv2.imdecode(arr2, cv2.IMREAD_COLOR)
         except Exception:
