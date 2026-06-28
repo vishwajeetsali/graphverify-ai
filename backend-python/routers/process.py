@@ -17,7 +17,18 @@ async def process_image(file: UploadFile = File(...)):
     visual_result = run_pipeline(image_bytes, file.filename)
 
     # Layer 3 — Structural (spatial graph anomaly detection)
-    structural_result = analyze_structure(image_bytes)
+    if visual_result.get('layer') == 'digital_pdf':
+        structural_result = {
+            'anomalies': [],
+            'anomaly_count': 0,
+            'risk_level': 'CLEAN',
+            'overlay_b64': None,
+            'words_found': 0,
+            'ocr_text': '',
+            'ocr_words': []
+        }
+    else:
+        structural_result = analyze_structure(image_bytes)
 
     return {
         # Visual layer

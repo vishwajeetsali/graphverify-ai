@@ -58,13 +58,21 @@ function extractTransactionRows(text, ocrWords = []) {
     const rows = []
     const lines = text.split('\n')
 
-    // Pattern to identify dates — strip before matching amounts
-    const datePattern = /(?:\b\d{4}[./-]\d{1,2}[./-]\d{1,2}\b)|(?:\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b)/g
+    // Pattern to identify dates (including textual month abbreviations) — strip before matching amounts
+    const datePattern = /(?:\b\d{1,2}[-./\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[-./\s]\d{2,4}\b)|(?:\b\d{4}[-./]\d{1,2}[-./]\d{1,2}\b)|(?:\b\d{1,2}[-./]\d{1,2}[-./]\d{2,4}\b)/gi
+
+    // Pattern to verify a transaction row contains a valid date signature
+    const rowDatePattern = /(?:\b\d{1,2}[-./\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[-./\s]\d{2,4}\b)|(?:\b\d{4}[-./]\d{1,2}[-./]\d{1,2}\b)|(?:\b\d{1,2}[-./]\d{1,2}[-./]\d{2,4}\b)/i
 
     // Robust monetary pattern: Matches currency prefixes OR numbers with 2 decimals OR large integers (>=4 digits)
     const numPattern = /(?:[$₹€£¥]|USD|INR|EUR|GBP)\s*(?<![\d,])\d+(?:[,\s\u00A0]\d+)*(?:\.\d{1,2})?\b|(?<![\d,])\d+(?:[,\s\u00A0]\d+)*\.\d{2}(?!\d)|(?<![\d,])\d{1,3}(?:[,\s\u00A0]\d{3})+(?!\d)|\b\d{4,9}\b/g
 
     lines.forEach((line, idx) => {
+        // Gating constraint: The line must contain a date signature to be considered a transaction row
+        if (!rowDatePattern.test(line)) {
+            return
+        }
+
         // Strip date patterns to prevent matching date segments as prices
         const cleanedLine = line.replace(datePattern, '')
         const rawMatches = cleanedLine.match(numPattern)

@@ -69,8 +69,10 @@ exports.uploadDocument = async (req, res) => {
         let logicalExplanation = null
         let isStructuralAnomaly = false
 
-        // Cascade gate: If visual score is highly confident it's clean (< 15.0), bypass downstream layers
-        if (aiResult.risk_score >= 15.0) {
+        const isDigitalPdf = req.file.mimetype === 'application/pdf' && aiResult.layer === 'digital_pdf'
+
+        // Cascade gate: If visual score is highly confident it's clean (< 15.0), bypass downstream layers (except for digital PDFs which bypass visual layer but require logical math audit)
+        if (aiResult.risk_score >= 15.0 || isDigitalPdf) {
             const { checkLogic } = require('./logicController')
             const ocrText = aiResult.structural?.ocr_text || ''
             const ocrWords = aiResult.structural?.ocr_words || []

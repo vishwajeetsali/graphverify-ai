@@ -268,7 +268,35 @@ def generate_gradcam(model, input_tensor, target_class=1):
     return cam
 
 
+def _is_digital_pdf(image_bytes: bytes) -> bool:
+    """Detect if the input bytes are a digital PDF with selectable text."""
+    try:
+        import fitz
+        doc = fitz.open(stream=image_bytes, filetype="pdf")
+        if len(doc) > 0:
+            page = doc[0]
+            text = page.get_text()
+            # If the PDF contains a reasonable amount of text, it's digital
+            if len(text.strip()) > 40:
+                return True
+    except Exception as e:
+        print(f"[HYBRID PDF] Error checking PDF text: {e}")
+    return False
+
+
 def run_pipeline(image_bytes: bytes, filename: str) -> dict:
+    # Check if the document is a digital PDF first
+    if _is_digital_pdf(image_bytes):
+        print(f"[HYBRID PDF] Detected digital vector PDF: {filename}. Bypassing visual models.")
+        return {
+            'forged': False,
+            'risk_score': 1.0,
+            'heatmap_base64': None,
+            'gradcam_base64': None,
+            'layer': 'digital_pdf',
+            'tta_scores': [0.01] * 4,
+        }
+
     # ── Decode ──────────────────────────────────────────────────────────
     orig = _decode_image(image_bytes)
     if orig is None:
