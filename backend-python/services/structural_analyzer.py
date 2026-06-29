@@ -207,13 +207,30 @@ def _detect_font_anomalies(boxes):
 
 
 def _detect_alignment_anomalies(boxes):
-    """Detect text blocks that break column alignment."""
+    """Detect text blocks that break column alignment.
+    Skips the top 28% of the document (header/title area) since bank
+    statement headers (Account Number, Statement Period, bank name) are
+    naturally indented differently from transaction data columns and must
+    not be flagged as alignment anomalies.
+    """
     if len(boxes) < 6:
+        return []
+
+    # Determine document vertical extent
+    all_ys = [b['y'] for b in boxes]
+    doc_top = min(all_ys)
+    doc_bottom = max(all_ys)
+    doc_height = max(1, doc_bottom - doc_top)
+    header_cutoff = doc_top + doc_height * 0.28   # skip top 28%
+
+    # Only analyse boxes in the transaction body area
+    body_boxes = [b for b in boxes if b['y'] >= header_cutoff]
+    if len(body_boxes) < 6:
         return []
 
     # Group boxes by approximate row (same y ± 10px)
     rows = {}
-    for box in boxes:
+    for box in body_boxes:
         placed = False
         for row_y in rows:
             if abs(box['y'] - row_y) < 12:
@@ -223,7 +240,7 @@ def _detect_alignment_anomalies(boxes):
         if not placed:
             rows[box['y']] = [box]
 
-    # Find boundary column starts by selecting only starts, ends, and amount columns in rows
+    # Find boundary column starts
     row_starts = []
     for r_y in rows:
         r_boxes = sorted(rows[r_y], key=lambda b: b['x'])
@@ -237,29 +254,31 @@ def _detect_alignment_anomalies(boxes):
     if not row_starts:
         return []
 
-    # Cluster boundary x positions — find most common column lines
+    # Cluster boundary x positions
     left_xs_arr = np.array(row_starts)
     hist, edges = np.histogram(left_xs_arr, bins=20)
     dominant_cols = []
     for i, count in enumerate(hist):
-        if count >= 3:   # at least 3 rows share this column start
+        if count >= 3:
             dominant_cols.append((edges[i] + edges[i+1]) / 2)
 
     if not dominant_cols:
         return []
 
     anomalies = []
-    # Track shifts that appear on ≥2 boxes (single-occurrence = likely scanner jitter)
     from collections import defaultdict
     offset_bucket = defaultdict(list)
-    for box in boxes:
+    for box in body_boxes:
         min_dist = min(abs(box['x'] - col) for col in dominant_cols)
-        # Shift check matches actual injected shifts range in generator (3px to 12px)
-        if 3 <= min_dist <= 12 and len(str(box['text'])) > 3:
+        if 3 <= min_dist <= 25 and len(str(box['text'])) > 3:
             bucket_key = round(min_dist / 3) * 3
             offset_bucket[bucket_key].append((box, min_dist))
 
     for bucket_key, items in offset_bucket.items():
+        # Skip buckets with too many entries — large buckets indicate a normal
+        # structural pattern (e.g. indented section header), not a forgery signal
+        if len(items) > 8:
+            continue
         for box, min_dist in items:
             anomalies.append({
                 'type':     'ALIGNMENT_BREAK',
@@ -269,7 +288,7 @@ def _detect_alignment_anomalies(boxes):
                 'detail':   f"Text shifted from column line (offset={min_dist:.0f}px, {len(items)} occurrence(s))"
             })
 
-    return anomalies[:5]   # cap at 5 to avoid noise
+    return anomalies[:5]
 
 
 def _detect_spacing_anomalies(boxes):
@@ -471,19 +490,21 @@ def _detect_ocr_confidence_anomalies(boxes):
     """
     Digitally injected or copy-moved text renders differently from surrounding
     printed text. Tesseract consistently returns anomalous confidence scores on
-    such text — either suspiciously high (perfect synthetic render) or low
-    (poor match with trained character models).
+    such text.
 
-    Flags words in numeric/amount columns whose confidence is a statistical
-    outlier vs all other boxes.
+    Skips masked/redacted words (e.g. 'xxxx-xxxx-3053') since OCR gives
+    genuinely low confidence on intentionally obscured characters.
     """
     if len(boxes) < 10:
         return []
 
     # Focus on words that look like amounts/balances (contain digits)
+    # Skip words that are mostly non-alphanumeric (masked account numbers, separators)
     numeric_boxes = [
         b for b in boxes
-        if any(c.isdigit() for c in b['text']) and len(b['text']) >= 2
+        if any(c.isdigit() for c in b['text'])
+        and len(b['text']) >= 2
+        and sum(1 for c in b['text'] if c.isalpha() or c.isdigit()) >= len(b['text']) * 0.5
     ]
 
     if len(numeric_boxes) < 5:
@@ -491,17 +512,16 @@ def _detect_ocr_confidence_anomalies(boxes):
 
     confs = np.array([b['conf'] for b in numeric_boxes], dtype=np.float32)
     mean_conf = confs.mean()
-    std_conf  = max(5.0, confs.std())  # floor std to avoid oversensitivity
+    std_conf  = max(5.0, confs.std())
 
     anomalies = []
     for b, conf in zip(numeric_boxes, confs):
         z = (conf - mean_conf) / std_conf
-        # Flag extreme outliers: conf much lower (poorly rendered) or much higher (synthetic)
-        if abs(z) > 2.8:
+        if abs(z) > 3.2:   # raised from 2.8 to reduce false positives
             direction = 'abnormally low' if z < 0 else 'suspiciously high'
             anomalies.append({
                 'type':     'OCR_CONFIDENCE_OUTLIER',
-                'severity': 'HIGH' if abs(z) > 3.5 else 'MEDIUM',
+                'severity': 'HIGH' if abs(z) > 4.0 else 'MEDIUM',
                 'text':     b['text'],
                 'location': f"({b['x']}, {b['y']})",
                 'detail':   (
@@ -518,18 +538,16 @@ def _detect_ocr_confidence_anomalies(boxes):
 
 def _detect_copy_move(img_bgr):
     """
-    ELA cannot detect copy-move forgeries because the copied region shares
-    the same compression history as the source. SIFT keypoint descriptor
-    matching finds self-similar regions within the same image.
+    ELA cannot detect copy-move forgeries. SIFT keypoint matching finds
+    self-similar regions in the same image.
 
-    Uses SIFT + FLANN matcher + Lowe ratio test + minimum spatial distance
-    filter to confirm genuine copy-move (source and destination are spatially
-    separated, not just symmetric background noise).
+    Thresholds are set conservatively to avoid false positives on genuine
+    bank statements which have repeated structural elements (horizontal
+    lines, table cells, logo repeats).
     """
     try:
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-        # Resize if too large to keep detection fast (< 2s)
         h, w = gray.shape
         max_dim = 1200
         scale = 1.0
@@ -543,31 +561,33 @@ def _detect_copy_move(img_bgr):
         if descs is None or len(kps) < 20:
             return []
 
-        # FLANN-based fast approximate nearest neighbour
-        index_params  = dict(algorithm=1, trees=5)  # FLANN_INDEX_KDTREE
+        index_params  = dict(algorithm=1, trees=5)
         search_params = dict(checks=50)
         flann = cv2.FlannBasedMatcher(index_params, search_params)
         matches = flann.knnMatch(descs, descs, k=3)
 
-        # Lowe ratio test (skip self-match at index 0)
-        MIN_DIST_PX = min(h, w) * 0.08  # must be >= 8% of image dimension apart
+        MIN_DIST_PX  = min(h, w) * 0.10   # raised: must be >= 10% of dimension apart
+        MIN_Y_FRAC   = 0.12                # vertical separation must be >= 12% of height
         good_matches = []
         for m_list in matches:
-            # m_list[0] is self-match (distance=0), use [1] and [2]
             if len(m_list) < 3:
                 continue
             m, n = m_list[1], m_list[2]
-            if m.distance < 0.72 * n.distance and m.queryIdx != m.trainIdx:
+            if m.distance < 0.70 * n.distance and m.queryIdx != m.trainIdx:
                 pt1 = np.array(kps[m.queryIdx].pt)
                 pt2 = np.array(kps[m.trainIdx].pt)
                 dist = np.linalg.norm(pt1 - pt2)
-                if dist > MIN_DIST_PX:
+                y_dist = abs(pt1[1] - pt2[1])
+                # Require both spatial distance AND vertical separation
+                # This filters horizontal-only matches (table row repeats)
+                if dist > MIN_DIST_PX and y_dist > h * MIN_Y_FRAC:
                     good_matches.append((pt1, pt2, m.distance))
 
-        if len(good_matches) < 8:
+        # Raised threshold: need 20+ strong matches to call copy-move
+        # (repeated table lines/borders typically produce < 15 cross-region matches)
+        if len(good_matches) < 20:
             return []
 
-        # Cluster match endpoints into spatial regions
         pts1 = np.array([m[0] for m in good_matches])
         centroid1 = pts1.mean(axis=0) / scale
         pts2 = np.array([m[1] for m in good_matches])
@@ -575,14 +595,14 @@ def _detect_copy_move(img_bgr):
 
         return [{
             'type':     'COPY_MOVE_REGION',
-            'severity': 'HIGH' if len(good_matches) >= 15 else 'MEDIUM',
+            'severity': 'HIGH' if len(good_matches) >= 30 else 'MEDIUM',
             'text':     f'{len(good_matches)} matched keypoints',
             'location': f'({int(centroid1[0])},{int(centroid1[1])}) → ({int(centroid2[0])},{int(centroid2[1])})',
             'detail':   (
                 f'{len(good_matches)} SIFT keypoint pairs match across spatially separated regions '
-                f'(min separation: {MIN_DIST_PX/scale:.0f}px). '
-                f'Source region ~({int(centroid1[0])},{int(centroid1[1])}) copied to '
-                f'~({int(centroid2[0])},{int(centroid2[1])}) — '
+                f'with >12% vertical separation. '
+                f'Source ~({int(centroid1[0])},{int(centroid1[1])}) → '
+                f'dest ~({int(centroid2[0])},{int(centroid2[1])}) — '
                 f'ELA-invisible copy-move forgery detected.'
             )
         }]
