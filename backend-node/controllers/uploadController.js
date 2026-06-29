@@ -102,11 +102,15 @@ exports.uploadDocument = async (req, res) => {
 
             // ── CROSS-LAYER EVIDENCE FUSION ───────────────────────────────────
             // fused_score = max(L1_visual, L2_structural × 0.35, L3_logic × 0.45)
+            // Structural HIGH (2+ HIGH anomalies) = 100pts × 0.35 = 35% = FORGED threshold
+            // Structural MEDIUM (1 HIGH or 3+ MEDIUM) = 50pts × 0.35 = 17.5% = CLEAN
+            // This means a single spurious HIGH anomaly on a clean doc (MEDIUM risk)
+            // contributes only 17.5% and cannot independently trigger FORGED.
             structuralScore = (() => {
                 const level = aiResult.structural?.risk_level
-                if (level === 'HIGH')   return 85
-                if (level === 'MEDIUM') return 55
-                if (level === 'LOW')    return 30
+                if (level === 'HIGH')   return 100   // 100 × 0.35 = 35% (hits threshold)
+                if (level === 'MEDIUM') return 50    //  50 × 0.35 = 17.5% (stays clean)
+                if (level === 'LOW')    return 20
                 return 0
             })()
             logicalScore = Math.min(100, (logicalWarnings?.length || 0) * 40)
@@ -115,7 +119,7 @@ exports.uploadDocument = async (req, res) => {
                 structuralScore * 0.35,
                 logicalScore * 0.45
             ))
-            fusedForged = fusedScore >= 30 || !!aiResult.forged
+            fusedForged = fusedScore >= 35 || !!aiResult.forged  // threshold raised from 30 → 35
             if (fusedForged && !aiResult.forged) {
                 console.log(`[FUSION OVERRIDE] L1=${aiResult.risk_score}% struct=${structuralScore} logic=${logicalScore} fused=${fusedScore}% → FORGED`)
             }

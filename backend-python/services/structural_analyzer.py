@@ -221,7 +221,7 @@ def _detect_alignment_anomalies(boxes):
     doc_top = min(all_ys)
     doc_bottom = max(all_ys)
     doc_height = max(1, doc_bottom - doc_top)
-    header_cutoff = doc_top + doc_height * 0.28   # skip top 28%
+    header_cutoff = doc_top + doc_height * 0.42   # skip top 42% (header + account summary)
 
     # Only analyse boxes in the transaction body area
     body_boxes = [b for b in boxes if b['y'] >= header_cutoff]
@@ -790,21 +790,24 @@ def analyze_structure(image_bytes: bytes) -> dict:
                 seen.add(key)
                 unique_anomalies.append(a)
 
-        # Risk level — require meaningful evidence before escalating
-        # A single LOW-severity anomaly (e.g. one low-confidence OCR word) on a
-        # clean scan must not produce a visible risk flag in the UI.
+        # Risk level — require 2+ HIGH anomalies for HIGH risk.
+        # Rationale: genuine forgeries (copy-move, text injection) produce MULTIPLE
+        # HIGH signals from the same tampered region (font size + OCR confidence + alignment).
+        # Clean documents may have ONE HIGH anomaly from a naturally large header font or
+        # a section gap between summary and transactions. Requiring 2+ prevents these
+        # normal structural features from triggering a FORGED verdict.
         high_count   = sum(1 for a in unique_anomalies if a['severity'] == 'HIGH')
         medium_count = sum(1 for a in unique_anomalies if a['severity'] == 'MEDIUM')
         low_count    = sum(1 for a in unique_anomalies if a['severity'] == 'LOW')
 
-        if high_count >= 2 or (high_count >= 1 and medium_count >= 2):
+        if high_count >= 2:
             risk_level = 'HIGH'
-        elif high_count >= 1 or medium_count >= 2:
+        elif high_count >= 1 or medium_count >= 3:
             risk_level = 'MEDIUM'
         elif medium_count >= 1 or low_count >= 2:
             risk_level = 'LOW'
         else:
-            risk_level = 'CLEAN'   # lone LOW anomalies = clean (scanner noise, not forgery)
+            risk_level = 'CLEAN'
 
         # Draw overlay
         overlay_b64 = _draw_anomaly_overlay(img, boxes, unique_anomalies)
