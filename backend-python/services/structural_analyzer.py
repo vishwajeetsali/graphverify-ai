@@ -207,30 +207,13 @@ def _detect_font_anomalies(boxes):
 
 
 def _detect_alignment_anomalies(boxes):
-    """Detect text blocks that break column alignment.
-    Skips the top 28% of the document (header/title area) since bank
-    statement headers (Account Number, Statement Period, bank name) are
-    naturally indented differently from transaction data columns and must
-    not be flagged as alignment anomalies.
-    """
+    """Detect text blocks that break column alignment."""
     if len(boxes) < 6:
-        return []
-
-    # Determine document vertical extent
-    all_ys = [b['y'] for b in boxes]
-    doc_top = min(all_ys)
-    doc_bottom = max(all_ys)
-    doc_height = max(1, doc_bottom - doc_top)
-    header_cutoff = doc_top + doc_height * 0.42   # skip top 42% (header + account summary)
-
-    # Only analyse boxes in the transaction body area
-    body_boxes = [b for b in boxes if b['y'] >= header_cutoff]
-    if len(body_boxes) < 6:
         return []
 
     # Group boxes by approximate row (same y ± 10px)
     rows = {}
-    for box in body_boxes:
+    for box in boxes:
         placed = False
         for row_y in rows:
             if abs(box['y'] - row_y) < 12:
@@ -240,7 +223,7 @@ def _detect_alignment_anomalies(boxes):
         if not placed:
             rows[box['y']] = [box]
 
-    # Find boundary column starts
+    # Find boundary column starts by selecting only starts, ends, and amount columns in rows
     row_starts = []
     for r_y in rows:
         r_boxes = sorted(rows[r_y], key=lambda b: b['x'])
@@ -254,31 +237,29 @@ def _detect_alignment_anomalies(boxes):
     if not row_starts:
         return []
 
-    # Cluster boundary x positions
+    # Cluster boundary x positions — find most common column lines
     left_xs_arr = np.array(row_starts)
     hist, edges = np.histogram(left_xs_arr, bins=20)
     dominant_cols = []
     for i, count in enumerate(hist):
-        if count >= 3:
+        if count >= 3:   # at least 3 rows share this column start
             dominant_cols.append((edges[i] + edges[i+1]) / 2)
 
     if not dominant_cols:
         return []
 
     anomalies = []
+    # Track shifts that appear on ≥2 boxes (single-occurrence = likely scanner jitter)
     from collections import defaultdict
     offset_bucket = defaultdict(list)
-    for box in body_boxes:
+    for box in boxes:
         min_dist = min(abs(box['x'] - col) for col in dominant_cols)
-        if 3 <= min_dist <= 25 and len(str(box['text'])) > 3:
+        # Shift check matches actual injected shifts range in generator (3px to 12px)
+        if 3 <= min_dist <= 12 and len(str(box['text'])) > 3:
             bucket_key = round(min_dist / 3) * 3
             offset_bucket[bucket_key].append((box, min_dist))
 
     for bucket_key, items in offset_bucket.items():
-        # Skip buckets with too many entries — large buckets indicate a normal
-        # structural pattern (e.g. indented section header), not a forgery signal
-        if len(items) > 8:
-            continue
         for box, min_dist in items:
             anomalies.append({
                 'type':     'ALIGNMENT_BREAK',
@@ -288,7 +269,7 @@ def _detect_alignment_anomalies(boxes):
                 'detail':   f"Text shifted from column line (offset={min_dist:.0f}px, {len(items)} occurrence(s))"
             })
 
-    return anomalies[:5]
+    return anomalies[:5]   # cap at 5 to avoid noise
 
 
 def _detect_spacing_anomalies(boxes):
@@ -421,195 +402,6 @@ def _draw_anomaly_overlay(img_bgr, boxes, anomalies):
 
     _, buf     = cv2.imencode('.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return base64.b64encode(buf).decode('utf-8')
-
-
-# ── ROW DELETION DETECTOR ──────────────────────────────────────────────────
-
-def _detect_row_deletion(boxes):
-    """
-    Detects deleted rows by finding abnormal Y-coordinate gaps between
-    consecutive OCR row groups. A deleted row creates a gap that is
-    statistically larger than the median inter-row spacing.
-    """
-    if len(boxes) < 8:
-        return []
-
-    # Group boxes into rows by Y proximity
-    rows = {}
-    for box in boxes:
-        placed = False
-        for row_y in rows:
-            if abs(box['y'] - row_y) < 14:
-                rows[row_y].append(box)
-                placed = True
-                break
-        if not placed:
-            rows[box['y']] = [box]
-
-    # Get sorted row Y-centers, only rows with >= 2 words (content rows)
-    row_ys = sorted(
-        [r_y for r_y in rows if len(rows[r_y]) >= 2]
-    )
-
-    if len(row_ys) < 4:
-        return []
-
-    gaps = [row_ys[i+1] - row_ys[i] for i in range(len(row_ys) - 1)]
-    sorted_gaps = sorted(gaps)
-    median_gap = sorted_gaps[len(sorted_gaps) // 2]
-
-    if median_gap < 5:
-        return []
-
-    anomalies = []
-    for i, gap in enumerate(gaps):
-        if gap > median_gap * 2.5 and gap > 20:
-            # Get representative text from surrounding rows
-            above_row = sorted(rows.get(row_ys[i], []), key=lambda b: b['x'])
-            below_row = sorted(rows.get(row_ys[i+1], []), key=lambda b: b['x'])
-            above_text = ' '.join(b['text'] for b in above_row[:3]) if above_row else '?'
-            below_text = ' '.join(b['text'] for b in below_row[:3]) if below_row else '?'
-            anomalies.append({
-                'type':     'ROW_DELETION_GAP',
-                'severity': 'HIGH' if gap > median_gap * 4 else 'MEDIUM',
-                'text':     f'{above_text} → {below_text}',
-                'location': f'(y={row_ys[i]}→{row_ys[i+1]})',
-                'detail':   (
-                    f'Y-gap of {gap}px between consecutive text rows '
-                    f'({gap/median_gap:.1f}× median={median_gap}px) — '
-                    f'consistent with a deleted transaction row.'
-                )
-            })
-
-    return anomalies[:3]
-
-
-# ── OCR CONFIDENCE ANOMALY DETECTOR ─────────────────────────────────────
-
-def _detect_ocr_confidence_anomalies(boxes):
-    """
-    Digitally injected or copy-moved text renders differently from surrounding
-    printed text. Tesseract consistently returns anomalous confidence scores on
-    such text.
-
-    Skips masked/redacted words (e.g. 'xxxx-xxxx-3053') since OCR gives
-    genuinely low confidence on intentionally obscured characters.
-    """
-    if len(boxes) < 10:
-        return []
-
-    # Focus on words that look like amounts/balances (contain digits)
-    # Skip words that are mostly non-alphanumeric (masked account numbers, separators)
-    numeric_boxes = [
-        b for b in boxes
-        if any(c.isdigit() for c in b['text'])
-        and len(b['text']) >= 2
-        and sum(1 for c in b['text'] if c.isalpha() or c.isdigit()) >= len(b['text']) * 0.5
-    ]
-
-    if len(numeric_boxes) < 5:
-        return []
-
-    confs = np.array([b['conf'] for b in numeric_boxes], dtype=np.float32)
-    mean_conf = confs.mean()
-    std_conf  = max(5.0, confs.std())
-
-    anomalies = []
-    for b, conf in zip(numeric_boxes, confs):
-        z = (conf - mean_conf) / std_conf
-        if abs(z) > 3.2:   # raised from 2.8 to reduce false positives
-            direction = 'abnormally low' if z < 0 else 'suspiciously high'
-            anomalies.append({
-                'type':     'OCR_CONFIDENCE_OUTLIER',
-                'severity': 'HIGH' if abs(z) > 4.0 else 'MEDIUM',
-                'text':     b['text'],
-                'location': f"({b['x']}, {b['y']})",
-                'detail':   (
-                    f"Numeric value '{b['text']}' has {direction} OCR confidence "
-                    f"({conf:.0f} vs column mean {mean_conf:.0f}, z={z:.2f}) — "
-                    f"may indicate digitally inserted or copy-moved text."
-                )
-            })
-
-    return anomalies[:4]
-
-
-# ── SIFT COPY-MOVE DETECTOR ────────────────────────────────────────────────
-
-def _detect_copy_move(img_bgr):
-    """
-    ELA cannot detect copy-move forgeries. SIFT keypoint matching finds
-    self-similar regions in the same image.
-
-    Thresholds are set conservatively to avoid false positives on genuine
-    bank statements which have repeated structural elements (horizontal
-    lines, table cells, logo repeats).
-    """
-    try:
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-        h, w = gray.shape
-        max_dim = 1200
-        scale = 1.0
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            gray = cv2.resize(gray, (int(w * scale), int(h * scale)))
-
-        sift = cv2.SIFT_create(nfeatures=800, contrastThreshold=0.04)
-        kps, descs = sift.detectAndCompute(gray, None)
-
-        if descs is None or len(kps) < 20:
-            return []
-
-        index_params  = dict(algorithm=1, trees=5)
-        search_params = dict(checks=50)
-        flann = cv2.FlannBasedMatcher(index_params, search_params)
-        matches = flann.knnMatch(descs, descs, k=3)
-
-        MIN_DIST_PX  = min(h, w) * 0.10   # raised: must be >= 10% of dimension apart
-        MIN_Y_FRAC   = 0.12                # vertical separation must be >= 12% of height
-        good_matches = []
-        for m_list in matches:
-            if len(m_list) < 3:
-                continue
-            m, n = m_list[1], m_list[2]
-            if m.distance < 0.70 * n.distance and m.queryIdx != m.trainIdx:
-                pt1 = np.array(kps[m.queryIdx].pt)
-                pt2 = np.array(kps[m.trainIdx].pt)
-                dist = np.linalg.norm(pt1 - pt2)
-                y_dist = abs(pt1[1] - pt2[1])
-                # Require both spatial distance AND vertical separation
-                # This filters horizontal-only matches (table row repeats)
-                if dist > MIN_DIST_PX and y_dist > h * MIN_Y_FRAC:
-                    good_matches.append((pt1, pt2, m.distance))
-
-        # Raised threshold: need 20+ strong matches to call copy-move
-        # (repeated table lines/borders typically produce < 15 cross-region matches)
-        if len(good_matches) < 20:
-            return []
-
-        pts1 = np.array([m[0] for m in good_matches])
-        centroid1 = pts1.mean(axis=0) / scale
-        pts2 = np.array([m[1] for m in good_matches])
-        centroid2 = pts2.mean(axis=0) / scale
-
-        return [{
-            'type':     'COPY_MOVE_REGION',
-            'severity': 'HIGH' if len(good_matches) >= 30 else 'MEDIUM',
-            'text':     f'{len(good_matches)} matched keypoints',
-            'location': f'({int(centroid1[0])},{int(centroid1[1])}) → ({int(centroid2[0])},{int(centroid2[1])})',
-            'detail':   (
-                f'{len(good_matches)} SIFT keypoint pairs match across spatially separated regions '
-                f'with >12% vertical separation. '
-                f'Source ~({int(centroid1[0])},{int(centroid1[1])}) → '
-                f'dest ~({int(centroid2[0])},{int(centroid2[1])}) — '
-                f'ELA-invisible copy-move forgery detected.'
-            )
-        }]
-
-    except Exception as e:
-        print(f'[COPY_MOVE] Detection failed: {e}')
-        return []
 
 
 # ── PDF METADATA FORENSICS ─────────────────────────────────────────────────
@@ -777,9 +569,6 @@ def analyze_structure(image_bytes: bytes) -> dict:
         all_anomalies += _detect_spacing_anomalies(boxes)
         all_anomalies += _detect_low_confidence(boxes)
         all_anomalies += _detect_isolated_islands(boxes)
-        all_anomalies += _detect_row_deletion(boxes)
-        all_anomalies += _detect_ocr_confidence_anomalies(boxes)
-        all_anomalies += _detect_copy_move(img)
 
         # Deduplicate by location
         seen = set()
@@ -790,24 +579,21 @@ def analyze_structure(image_bytes: bytes) -> dict:
                 seen.add(key)
                 unique_anomalies.append(a)
 
-        # Risk level — require 2+ HIGH anomalies for HIGH risk.
-        # Rationale: genuine forgeries (copy-move, text injection) produce MULTIPLE
-        # HIGH signals from the same tampered region (font size + OCR confidence + alignment).
-        # Clean documents may have ONE HIGH anomaly from a naturally large header font or
-        # a section gap between summary and transactions. Requiring 2+ prevents these
-        # normal structural features from triggering a FORGED verdict.
+        # Risk level — require meaningful evidence before escalating
+        # A single LOW-severity anomaly (e.g. one low-confidence OCR word) on a
+        # clean scan must not produce a visible risk flag in the UI.
         high_count   = sum(1 for a in unique_anomalies if a['severity'] == 'HIGH')
         medium_count = sum(1 for a in unique_anomalies if a['severity'] == 'MEDIUM')
         low_count    = sum(1 for a in unique_anomalies if a['severity'] == 'LOW')
 
-        if high_count >= 2:
+        if high_count >= 2 or (high_count >= 1 and medium_count >= 2):
             risk_level = 'HIGH'
-        elif high_count >= 1 or medium_count >= 3:
+        elif high_count >= 1 or medium_count >= 2:
             risk_level = 'MEDIUM'
         elif medium_count >= 1 or low_count >= 2:
             risk_level = 'LOW'
         else:
-            risk_level = 'CLEAN'
+            risk_level = 'CLEAN'   # lone LOW anomalies = clean (scanner noise, not forgery)
 
         # Draw overlay
         overlay_b64 = _draw_anomaly_overlay(img, boxes, unique_anomalies)

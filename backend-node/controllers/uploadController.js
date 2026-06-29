@@ -71,67 +71,34 @@ exports.uploadDocument = async (req, res) => {
 
         const isDigitalPdf = req.file.mimetype === 'application/pdf' && aiResult.layer === 'digital_pdf'
 
-        let fusedScore      = Math.round(aiResult.risk_score)
-        let fusedForged     = !!aiResult.forged
-        let structuralScore = 0
-        let logicalScore    = 0
-
-        // Cascade gate — run downstream layers if:
-        // (a) visual score >= 8% (borderline cases), OR
-        // (b) structural layer already found anomalies (SIFT/row-gap fire in Python
-        //     before calibration squashes the L1 score, so we must not throw them away), OR
-        // (c) digital PDF (visual layer bypassed entirely)
-        const hasStructuralHits = (aiResult.structural?.anomaly_count || 0) > 0
-        if (aiResult.risk_score >= 8.0 || hasStructuralHits || isDigitalPdf) {
+        // Cascade gate: If visual score is highly confident it's clean (< 15.0), bypass downstream layers (except for digital PDFs which bypass visual layer but require logical math audit)
+        if (aiResult.risk_score >= 15.0 || isDigitalPdf) {
             const { checkLogic } = require('./logicController')
-            const ocrText  = aiResult.structural?.ocr_text  || ''
+            const ocrText = aiResult.structural?.ocr_text || ''
             const ocrWords = aiResult.structural?.ocr_words || []
 
             console.log('[LOGIC INPUT] Original originalname:', req.file.originalname)
             console.log('[LOGIC INPUT] OCR text length:', ocrText.length)
-
+            
             const logicResult = await checkLogic(
-                req.file.path,
-                req.file.mimetype,
+                req.file.path, 
+                req.file.mimetype, 
                 ocrText,
-                ocrWords,
+                ocrWords, // Pass actual OCR words metadata for confidence checks
                 req.file.originalname
             )
-            logicalWarnings    = logicResult.warnings || []
+            logicalWarnings = logicResult.warnings || []
             logicalExplanation = logicResult.explanation || null
 
-            // ── CROSS-LAYER EVIDENCE FUSION ───────────────────────────────────
-            // fused_score = max(L1_visual, L2_structural × 0.35, L3_logic × 0.45)
-            // Structural HIGH (2+ HIGH anomalies) = 100pts × 0.35 = 35% = FORGED threshold
-            // Structural MEDIUM (1 HIGH or 3+ MEDIUM) = 50pts × 0.35 = 17.5% = CLEAN
-            // This means a single spurious HIGH anomaly on a clean doc (MEDIUM risk)
-            // contributes only 17.5% and cannot independently trigger FORGED.
-            structuralScore = (() => {
-                const level = aiResult.structural?.risk_level
-                if (level === 'HIGH')   return 100   // 100 × 0.35 = 35% (hits threshold)
-                if (level === 'MEDIUM') return 50    //  50 × 0.35 = 17.5% (stays clean)
-                if (level === 'LOW')    return 20
-                return 0
-            })()
-            logicalScore = Math.min(100, (logicalWarnings?.length || 0) * 40)
-            fusedScore   = Math.round(Math.max(
-                aiResult.risk_score,
-                structuralScore * 0.35,
-                logicalScore * 0.45
-            ))
-            fusedForged = fusedScore >= 35 || !!aiResult.forged  // threshold raised from 30 → 35
-            if (fusedForged && !aiResult.forged) {
-                console.log(`[FUSION OVERRIDE] L1=${aiResult.risk_score}% struct=${structuralScore} logic=${logicalScore} fused=${fusedScore}% → FORGED`)
-            }
-
-            isStructuralAnomaly = ['HIGH', 'MEDIUM'].includes(aiResult.structural?.risk_level)
+            isStructuralAnomaly = ['HIGH'].includes(aiResult.structural?.risk_level)
         } else {
-            console.log(`[CASCADE BYPASS] Visual=${aiResult.risk_score}% < 8% and no structural hits. Bypassing logic.`)
+            console.log(`[CASCADE BYPASS] Visual risk score ${aiResult.risk_score}% is < 15.0%. Bypassing structural/logical checks.`)
+            // Clear structural anomalies and risk level to prevent false visual highlighting in frontend
             if (aiResult.structural) {
-                aiResult.structural.anomalies     = []
+                aiResult.structural.anomalies = []
                 aiResult.structural.anomaly_count = 0
-                aiResult.structural.risk_level    = 'CLEAN'
-                aiResult.structural.overlay_b64   = null
+                aiResult.structural.risk_level = 'CLEAN'
+                aiResult.structural.overlay_b64 = null
             }
         }
 
@@ -146,9 +113,9 @@ exports.uploadDocument = async (req, res) => {
             aiResult.structural.overlay_b64 = saveBase64Image(aiResult.structural.overlay_b64, 'overlay', docId, 'jpg')
         }
 
-        // Calibrate validation status — uses fused score
+        // Calibrate validation status
         const isLogicalAnomaly = logicalWarnings && logicalWarnings.length > 0
-        const status = (fusedForged || isStructuralAnomaly || isLogicalAnomaly) ? 'flagged' : 'clean'
+        const status = (aiResult.forged || isStructuralAnomaly || isLogicalAnomaly) ? 'flagged' : 'clean'
 
         if (isDbConnected && doc) {
             await Document.findByIdAndUpdate(doc._id, {
@@ -169,7 +136,7 @@ exports.uploadDocument = async (req, res) => {
         return res.json({
             documentId: docId,
             status,
-            forensicScore: fusedScore,
+            forensicScore: aiResult.risk_score,
             heatmap: heatmapPath,
             gradcam: gradcamPath,
             originalImage: `/uploads/${req.file.filename}`,
@@ -177,13 +144,7 @@ exports.uploadDocument = async (req, res) => {
             logicalExplanation,
             structural: aiResult.structural || {},
             pdfMetadata: aiResult.pdf_metadata || null,
-            layer: aiResult.layer,
-            fusionDetails: {
-                visualScore: aiResult.risk_score,
-                structuralScore,
-                logicalScore,
-                fusedScore
-            }
+            layer: aiResult.layer
         })
 
     } catch (err) {
