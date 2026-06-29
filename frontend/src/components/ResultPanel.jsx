@@ -14,6 +14,7 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
     const [visualMode, setVisualMode] = useState('heatmap')
     const [heatmapOpacity, setHeatmapOpacity] = useState(0.85)
     const [scoreAnim, setScoreAnim] = useState(0)
+    const [reportStatus, setReportStatus] = useState('idle') // idle | generating | done | error
 
     // Determine the document image preview source
     const [livePreviewSrc, setLivePreviewSrc] = useState(null)
@@ -75,19 +76,21 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
     const ringOffset = circumference - (scoreAnim / 100) * circumference
     const ringColor = scoreAnim > 60 ? '#f43f5e' : scoreAnim > 30 ? '#fbbf24' : '#10b981'
 
-    // Generate & open forensic report in new window
+    // Generate forensic report and download as HTML file
     const generateReport = () => {
-        const ts = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-        const flagList = (logicalWarnings || []).map(w => `<li>${w.message || w}</li>`).join('')
-        const structAnomalies = (structural?.anomalies || []).map(a =>
-            `<li><strong>${a.type}</strong> — ${a.detail || ''} (${a.severity || ''} severity)</li>`
-        ).join('')
-        const metaFlags = (pdfMetadata?.flags || []).map(f =>
-            `<li><strong>${f.type.replace(/_/g,' ')}</strong> [${f.severity}] — ${f.detail}</li>`
-        ).join('')
-        const ttaList = ttaScores.map((s,i) => `TTA Pass ${i+1}: ${(s*100).toFixed(1)}%`).join(' | ')
+        try {
+            setReportStatus('generating')
+            const ts = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+            const flagList = (logicalWarnings || []).map(w => `<li>${w?.message || w || ''}</li>`).join('')
+            const structAnomalies = (structural?.anomalies || []).map(a =>
+                `<li><strong>${a?.type || 'ANOMALY'}</strong> — ${a?.detail || ''} (${a?.severity || 'UNKNOWN'} severity)</li>`
+            ).join('')
+            const metaFlags = (pdfMetadata?.flags || []).map(f =>
+                `<li><strong>${(f?.type || '').replace(/_/g,' ')}</strong> [${f?.severity || ''}] — ${f?.detail || ''}</li>`
+            ).join('')
+            const ttaList = (result.tta_scores || []).map((s,i) => `TTA Pass ${i+1}: ${((s||0)*100).toFixed(1)}%`).join(' | ')
 
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+            const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>GraphVerify AI — Forensic Report</title>
 <style>
   body{font-family:'Segoe UI',Arial,sans-serif;margin:40px;color:#111;line-height:1.6;max-width:780px}
@@ -104,53 +107,55 @@ export default function ResultPanel({ result, loading, uploadedFile }) {
 </style></head><body>
 <h1>🔬 GraphVerify AI — Forensic Analysis Report</h1>
 <div class="meta">
-  <strong>Document:</strong> ${result.fileName || uploadedFile?.name || 'Unknown'}<br>
+  <strong>Document:</strong> ${result?.fileName || uploadedFile?.name || 'Unknown'}<br>
   <strong>Scan ID:</strong> ${documentId || '—'}<br>
   <strong>Timestamp:</strong> ${ts}<br>
   <strong>Analysis Layer:</strong> ${layer || 'forensic'}
 </div>
-
 <div class="verdict ${isFlagged?'forged':'clean'}">
   ${isFlagged ? '🚨 POTENTIAL FORGERY DETECTED' : '✅ DOCUMENT VERIFIED — CLEAN'}
 </div>
-
 <h2>Layer 1 — Visual Forensic Score</h2>
-<p class="score">${forensicScore}%</p>
-<p>Compression profile: <strong>${forensicScore > 50 ? 'Anomaly Detected' : 'Normal / Consistent'}</strong></p>
+<p class="score">${forensicScore || 0}%</p>
+<p>Compression profile: <strong>${(forensicScore||0) > 50 ? 'Anomaly Detected' : 'Normal / Consistent'}</strong></p>
 ${ttaList ? `<p style="font-size:12px;color:#555">TTA Confidence Breakdown: ${ttaList}</p>` : ''}
-
 <h2>Layer 2 — Structural Graph Analysis</h2>
 <p>Risk Level: <strong>${structural?.risk_level || 'CLEAN'}</strong> | Layout Contradictions: <strong>${structural?.anomaly_count || 0}</strong> | Words Scanned: <strong>${structural?.words_found || 0}</strong></p>
 ${structAnomalies ? `<ul>${structAnomalies}</ul>` : '<p>No structural anomalies detected.</p>'}
-
 <h2>Layer 3 — Mathematical Reconciliation</h2>
 ${flagList ? `<ul>${flagList}</ul>` : '<p>All transaction balances reconcile within ±₹1.00 tolerance.</p>'}
 ${logicalExplanation ? `<div class="meta"><strong>AI Audit Summary:</strong><br>${logicalExplanation}</div>` : ''}
-
 ${isDigitalPdf && pdfMetadata ? `
 <h2>Layer 4 — PDF Metadata Forensics</h2>
-<p>Metadata Risk: <strong>${pdfMetadata.risk_level}</strong> | Flags: <strong>${pdfMetadata.flag_count}</strong></p>
+<p>Metadata Risk: <strong>${pdfMetadata.risk_level || '—'}</strong> | Flags: <strong>${pdfMetadata.flag_count || 0}</strong></p>
 ${metaFlags ? `<ul>${metaFlags}</ul>` : '<p>No metadata tampering signals detected.</p>'}
 <div class="meta" style="font-size:12px">
   Producer: ${pdfMetadata.raw_metadata?.producer||'—'} | Creator: ${pdfMetadata.raw_metadata?.creator||'—'}<br>
   Created: ${pdfMetadata.raw_metadata?.created||'—'} | Modified: ${pdfMetadata.raw_metadata?.modified||'—'}
 </div>` : ''}
-
 <div class="footer">
   Generated by GraphVerify AI — SuRaksha Forensic Auditing Suite<br>
   This report is for informational purposes. Findings should be reviewed by a qualified forensic analyst.
 </div>
 </body></html>`
 
-        const blob = new Blob([html], { type: 'text/html' })
-        const url  = URL.createObjectURL(blob)
-        const a    = document.createElement('a')
-        a.href     = url
-        a.download = `forensic-report-${documentId || 'scan'}.html`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
+            const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+            const url  = URL.createObjectURL(blob)
+            const a    = document.createElement('a')
+            a.href     = url
+            a.download = `forensic-report-${documentId || 'scan'}.html`
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            setReportStatus('done')
+            setTimeout(() => setReportStatus('idle'), 3000)
+        } catch (err) {
+            console.error('[REPORT ERROR]', err)
+            setReportStatus('error')
+            alert(`Report generation failed: ${err.message}`)
+            setTimeout(() => setReportStatus('idle'), 3000)
+        }
     }
 
 
@@ -205,12 +210,11 @@ ${metaFlags ? `<ul>${metaFlags}</ul>` : '<p>No metadata tampering signals detect
 
                 <button
                     onClick={generateReport}
-                    title="Download Forensic Report"
-                    style={{ flexShrink: 0, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#d1d5db', cursor: 'pointer', fontSize: '11px', fontWeight: '700', padding: '7px 12px', letterSpacing: '0.02em', whiteSpace: 'nowrap' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.07)'}
+                    disabled={reportStatus === 'generating'}
+                    title="Download Forensic Report as HTML"
+                    style={{ flexShrink: 0, background: reportStatus === 'done' ? 'rgba(16,185,129,0.15)' : reportStatus === 'error' ? 'rgba(244,63,94,0.15)' : 'rgba(255,255,255,0.07)', border: `1px solid ${reportStatus === 'done' ? 'rgba(16,185,129,0.3)' : reportStatus === 'error' ? 'rgba(244,63,94,0.3)' : 'rgba(255,255,255,0.12)'}`, borderRadius: '8px', color: reportStatus === 'done' ? '#10b981' : reportStatus === 'error' ? '#f43f5e' : '#d1d5db', cursor: reportStatus === 'generating' ? 'wait' : 'pointer', fontSize: '11px', fontWeight: '700', padding: '7px 12px', letterSpacing: '0.02em', whiteSpace: 'nowrap', transition: 'all 0.2s' }}
                 >
-                    📄 Export Report
+                    {reportStatus === 'generating' ? '⏳ Generating...' : reportStatus === 'done' ? '✓ Downloaded' : reportStatus === 'error' ? '✗ Failed' : '📄 Export Report'}
                 </button>
             </div>
 
